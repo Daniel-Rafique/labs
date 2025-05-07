@@ -1,14 +1,23 @@
 # License Verification System
 
 ## Overview
-This system provides license key generation and verification for the Volume Bot application. When users make a payment through the Telegram bot, they will receive a license key that can be used to activate the application.
+This system provides license key generation and verification for the LABS application. When users purchase a subscription, they will receive a license key that can be used to activate the desktop application.
+
+The LABS application includes several key features:
+- Automated market making and trading
+- Automated PumpFun comments and community engagement
+- AI-driven trading strategies
+- Volume and liquidity enhancement
+- DEX ranking optimization
+- Holder count distribution
 
 ## License Tiers
-The system supports the following license tiers based on the amount of SOL paid:
+The system supports the following subscription tiers based on the amount of SOL paid:
 
-- **1 SOL**: 1 month license
-- **5 SOL**: 6 months license
-- **8+ SOL**: 1 year license
+- **1 SOL**: 1 month subscription
+- **3 SOL**: 3 months subscription
+- **5 SOL**: 6 months subscription
+- **8+ SOL**: 12 months subscription
 
 ## Application Downloads
 
@@ -24,17 +33,17 @@ The ZIP file contains the application for all supported platforms.
 ## License Status Management
 The system automatically manages license key status:
 
-- **VALID**: Active license that hasn't expired
-- **INVALID**: Expired license or manually invalidated license
+- **VALID**: Active subscription that hasn't expired
+- **INVALID**: Expired subscription or manually invalidated license
 
-When a license expires, its status is automatically changed to INVALID, both:
+When a subscription expires, its status is automatically changed to INVALID, both:
 1. At verification time (when a user tries to use an expired license)
 2. Through a daily scheduled check that updates all expired licenses
 
 ## API Endpoints
 
 ### 1. License Verification
-Verify a license key for a specific chat ID:
+Verify a license key for a specific machine ID:
 
 ```
 POST /api/verify-license
@@ -43,7 +52,7 @@ POST /api/verify-license
 **Request Body:**
 ```json
 {
-  "chatId": "123456789",
+  "machineId": "123456789",
   "licenseKey": "ABCD-1234-EFGH-5678",
   "timestamp": 1627846400000,
   "hash": "generated_hash_value"
@@ -118,7 +127,7 @@ POST /api/check-expired-licenses
 ## Implementation Details
 
 1. **License Key Generation**:
-   - Generated when users send the required amount of SOL
+   - Generated when users purchase a subscription
    - Uses cryptographic hashing to create unique keys
    - Formatted as `XXXX-XXXX-XXXX-XXXX` for easy reading
 
@@ -129,7 +138,7 @@ POST /api/check-expired-licenses
 
 3. **License Validation**:
    - Checks key validity and expiration date
-   - Requires proper chat ID for verification
+   - Requires proper machine ID for verification
    - Automatically updates expired licenses to INVALID status
 
 4. **Automatic Expiration Handling**:
@@ -144,6 +153,6 @@ POST /api/check-expired-licenses
 
 ## Security Notes
 - All API requests require a hash verification
-- License keys are tied to specific chat IDs
+- License keys are tied to specific machine IDs
 - Master key generation is restricted to admin access only
 - Expired licenses are automatically invalidated 

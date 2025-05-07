@@ -21,7 +21,8 @@
     "package": "npm run build && pkg . --targets node18-macos-x64,node18-linux-x64,node18-win-x64 --output releases/labs-volume-bot --no-audit",
     "build-release": "node build-release.js",
     "clean": "rm -rf dist node_modules package-lock.json",
-    "postinstall": "tsc --skipLibCheck --noEmitOnError false -p tsconfig.json && npx patch-package"
+    "postinstall": "tsc --skipLibCheck --noEmitOnError false -p tsconfig.json && npx patch-package",
+    "check-license": "node scripts/license-check.js # Usage: npm run check-license -- --key YOUR-LICENSE-KEY --save"
   },
   "dependencies": {
     "@solana/buffer-layout": "4.0.1",

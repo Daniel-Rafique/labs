@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * License check script for Solana-MMarker
- * Validates license keys at runtime
+ * License check script for LABS
+ * Validates subscription license keys for the desktop application
  */
 
 const fs = require('fs');
@@ -21,13 +21,13 @@ const colors = {
   cyan: '\x1b[36m'
 };
 
-// License verification server URL
-const LICENSE_SERVER = process.env.LICENSE_SERVER || 'https://api.koynlabs.com/license';
+// License verification server URL (using environment variable or default to the API URL)
+const LICENSE_SERVER = process.env.LICENSE_SERVER || 'https://api.koynlabs.com/api/verify-license';
 
 // Path to license file in user's home directory
 const userHome = os.homedir();
-const licenseDirPath = path.join(userHome, '.solana-mmaker');
-const licenseFilePath = path.join(licenseDirPath, 'license.json');
+const licenseDirPath = path.join(userHome, '.labs-volume-bot');
+const licenseFilePath = path.join(licenseDirPath, 'license.key');
 
 /**
  * Get a unique machine identifier
@@ -82,139 +82,130 @@ function getMachineId() {
 }
 
 /**
- * Decrypt license data from storage
+ * Load license key from file
  */
-function decryptLicenseData(encryptedData) {
+function loadLicenseKey() {
   try {
-    // Generate the same derived key from machine-specific factors
-    const machineId = getMachineId();
-    const derivedKey = machineId.substring(0, 32);
-    const iv = Buffer.from(encryptedData.iv, 'hex');
+    // First check for license in the app directory
+    const appLicensePath = path.join(process.cwd(), 'license.key');
+    if (fs.existsSync(appLicensePath)) {
+      return fs.readFileSync(appLicensePath, 'utf8').trim();
+    }
     
-    // Decrypt the data
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(derivedKey), iv);
-    const decrypted = Buffer.concat([
-      decipher.update(Buffer.from(encryptedData.data, 'hex')),
-      decipher.final()
-    ]);
+    // Then check the user's home directory
+    if (fs.existsSync(licenseFilePath)) {
+      return fs.readFileSync(licenseFilePath, 'utf8').trim();
+    }
     
-    return JSON.parse(decrypted.toString('utf8'));
+    // Finally check environment variable
+    if (process.env.LICENSE_KEY) {
+      return process.env.LICENSE_KEY.trim();
+    }
+    
+    return null;
   } catch (error) {
-    console.error(`${colors.red}Decryption error: ${error.message}${colors.reset}`);
+    console.error(`${colors.red}Error loading license key: ${error.message}${colors.reset}`);
     return null;
   }
 }
 
 /**
- * Load license data from file
+ * Generate a hash for verification
  */
-function loadLicenseData() {
-  try {
-    if (!fs.existsSync(licenseFilePath)) {
-      return null;
-    }
-    
-    const encryptedData = JSON.parse(fs.readFileSync(licenseFilePath, 'utf8'));
-    return decryptLicenseData(encryptedData);
-  } catch (error) {
-    console.error(`${colors.red}Error loading license: ${error.message}${colors.reset}`);
-    return null;
-  }
+function generateHash(machineId, timestamp) {
+  // This should match the hash generation in the server
+  const encryptionKey = process.env.ENCRYPTION_KEY || 'default-encryption-key';
+  const data = `${machineId}:${timestamp}:${encryptionKey}`;
+  return crypto.createHash('sha256').update(data).digest('hex');
 }
 
 /**
  * Verify license with server
  */
-async function verifyLicenseWithServer(licenseData) {
+async function verifyLicenseWithServer(licenseKey, machineId) {
   try {
-    // Skip server verification if in offline mode
-    if (licenseData.plan === 'offline_mode') {
-      return { 
-        valid: true, 
-        message: 'Offline mode active',
-        expiresAt: licenseData.expiresAt
-      };
-    }
+    const timestamp = Date.now();
+    const hash = generateHash(machineId, timestamp);
+    
+    console.log(`${colors.blue}Verifying license with server...${colors.reset}`);
     
     // Contact the license server to verify the key
-    const response = await axios.post(`${LICENSE_SERVER}/verify`, {
-      licenseKey: licenseData.key,
-      machineId: licenseData.machineId,
-      appVersion: process.env.npm_package_version || '1.0.0',
-      timestamp: Date.now()
+    // This matches the exact structure expected by our /api/verify-license endpoint
+    const response = await axios.post(LICENSE_SERVER, {
+      machineId: machineId.toString(),
+      licenseKey: licenseKey,
+      timestamp: timestamp,
+      hash: hash
     }, {
-      timeout: 5000 // Short timeout to avoid blocking startup
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000 // 10 second timeout
     });
     
-    if (response.status === 200) {
+    if (response.status === 200 && response.data.valid) {
       return {
-        valid: response.data.valid,
+        valid: true,
         message: response.data.message || 'License verified with server',
-        expiresAt: response.data.expiresAt || licenseData.expiresAt
+        expiresAt: response.data.expiresAt || null,
+        senderWallet: response.data.senderWallet || null
+      };
+    } else if (response.status === 401) {
+      return { 
+        valid: false,
+        message: response.data.message || 'Invalid or expired license key'
+      };
+    } else {
+      console.log(`${colors.yellow}Server returned unexpected response: ${JSON.stringify(response.data)}${colors.reset}`);
+      return { 
+        valid: false, 
+        message: 'Server verification failed',
+        offline: true
       };
     }
-    
-    return { 
-      valid: false, 
-      message: 'Server verification failed',
-      offline: true
-    };
   } catch (error) {
     console.log(`${colors.yellow}Server verification error: ${error.message}${colors.reset}`);
     
-    // Fallback to offline verification
-    return { 
-      valid: true, 
-      message: 'Fallback to offline verification',
-      offline: true,
-      expiresAt: licenseData.expiresAt
-    };
+    // Fallback to offline verification if server is unreachable
+    return verifyLicenseOffline(licenseKey);
   }
 }
 
 /**
- * Check if license is still valid offline
+ * Perform basic offline verification of license key format
  */
-function verifyLicenseOffline(licenseData) {
-  // No license data
-  if (!licenseData) {
+function verifyLicenseOffline(licenseKey) {
+  // No license key
+  if (!licenseKey) {
     return { 
       valid: false, 
-      message: 'No license data found' 
+      message: 'No license key found' 
     };
   }
   
-  // Check if license has expired
-  if (licenseData.expiresAt < Date.now()) {
-    return { 
-      valid: false, 
-      message: 'License has expired' 
-    };
-  }
-  
-  // Check if machine ID matches
-  const currentMachineId = getMachineId();
-  if (licenseData.machineId !== currentMachineId) {
-    return { 
-      valid: false, 
-      message: 'License is bound to a different machine' 
-    };
-  }
-  
-  // Check for trial license
-  if (licenseData.key.startsWith('TRIAL-')) {
-    const daysLeft = Math.ceil((licenseData.expiresAt - Date.now()) / (1000 * 60 * 60 * 24));
+  // Check for master license key format
+  if (licenseKey.startsWith('MASTER-')) {
     return { 
       valid: true, 
-      message: `Trial license (${daysLeft} days remaining)`,
-      trial: true
+      message: 'Master license key detected (offline verification)',
+      offline: true 
     };
   }
   
-  // Regular license is valid offline
+  // Check for standard license key format (XXXX-XXXX-XXXX-XXXX)
+  const licenseRegex = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+  if (licenseRegex.test(licenseKey)) {
+    return { 
+      valid: true, 
+      message: 'License key format is valid (offline verification)',
+      offline: true 
+    };
+  }
+  
+  // Invalid format
   return { 
-    valid: true, 
-    message: 'License is valid' 
+    valid: false, 
+    message: 'Invalid license key format' 
   };
 }
 
@@ -223,22 +214,36 @@ function verifyLicenseOffline(licenseData) {
  */
 async function checkLicense() {
   try {
-    // Load license data
-    const licenseData = loadLicenseData();
+    // Load license key
+    const licenseKey = loadLicenseKey();
     
-    // Perform offline check first
-    const offlineCheck = verifyLicenseOffline(licenseData);
-    
-    // If not valid offline, return immediately
-    if (!offlineCheck.valid) {
-      return offlineCheck;
+    // No license key found
+    if (!licenseKey) {
+      console.log(`${colors.yellow}No license key found. Please set your license key in license.key file or LICENSE_KEY environment variable.${colors.reset}`);
+      return {
+        valid: false,
+        message: 'No license key found'
+      };
     }
     
-    // If valid offline, try to verify with server
-    const serverCheck = await verifyLicenseWithServer(licenseData);
+    console.log(`${colors.blue}Found license key: ${licenseKey.substring(0, 4)}...${licenseKey.substring(licenseKey.length - 4)}${colors.reset}`);
     
-    // Return server check result, or fall back to offline check
-    return serverCheck || offlineCheck;
+    // Get machine ID for verification
+    const machineId = getMachineId();
+    console.log(`${colors.blue}Machine ID: ${machineId.substring(0, 8)}...${colors.reset}`);
+    
+    // Try to verify with server
+    console.log(`${colors.blue}Verifying with server at: ${LICENSE_SERVER}${colors.reset}`);
+    try {
+      const serverCheck = await verifyLicenseWithServer(licenseKey, machineId);
+      return serverCheck;
+    } catch (serverError) {
+      console.log(`${colors.yellow}Server verification failed: ${serverError.message}${colors.reset}`);
+      console.log(`${colors.yellow}Falling back to offline check...${colors.reset}`);
+      
+      // Fall back to offline verification
+      return verifyLicenseOffline(licenseKey);
+    }
   } catch (error) {
     console.error(`${colors.red}License check error: ${error.message}${colors.reset}`);
     return { 
@@ -270,12 +275,52 @@ function formatTimeRemaining(ms) {
  */
 async function main() {
   try {
-    // Check if CLI arguments include --silent
-    const isSilent = process.argv.includes('--silent');
-    const isJson = process.argv.includes('--json');
+    // Display banner
+    console.log(`
+${colors.cyan}╔════════════════════════════════════════════════════════════╗
+║                  LABS SUBSCRIPTION CHECKER                 ║
+╚════════════════════════════════════════════════════════════╝${colors.reset}
+`);
+    
+    // Parse command-line arguments
+    const args = process.argv.slice(2);
+    const isSilent = args.includes('--silent');
+    const isJson = args.includes('--json');
+    
+    // Check if a specific license key is provided for testing
+    let testLicenseKey = null;
+    const keyIndex = args.findIndex(arg => arg === '--key');
+    if (keyIndex !== -1 && args.length > keyIndex + 1) {
+      testLicenseKey = args[keyIndex + 1];
+      console.log(`${colors.blue}Testing with provided license key: ${testLicenseKey.substring(0, 4)}...${colors.reset}`);
+      
+      // Store the key for future use if --save flag is present
+      if (args.includes('--save')) {
+        try {
+          if (!fs.existsSync(licenseDirPath)) {
+            fs.mkdirSync(licenseDirPath, { recursive: true });
+          }
+          fs.writeFileSync(licenseFilePath, testLicenseKey);
+          console.log(`${colors.green}License key saved to ${licenseFilePath}${colors.reset}`);
+        } catch (saveError) {
+          console.error(`${colors.red}Failed to save license key: ${saveError.message}${colors.reset}`);
+        }
+      }
+    }
+    
+    // Override loadLicenseKey if test key is provided
+    const originalLoadLicenseKey = loadLicenseKey;
+    if (testLicenseKey) {
+      global.loadLicenseKey = () => testLicenseKey;
+    }
     
     // Perform license check
     const licenseStatus = await checkLicense();
+    
+    // Restore original function
+    if (testLicenseKey) {
+      global.loadLicenseKey = originalLoadLicenseKey;
+    }
     
     if (isJson) {
       // Output as JSON for programmatic use
@@ -287,7 +332,8 @@ async function main() {
       // Format expiration date if available
       let expirationInfo = '';
       if (licenseStatus.expiresAt) {
-        const timeRemaining = licenseStatus.expiresAt - Date.now();
+        const expiryDate = new Date(licenseStatus.expiresAt);
+        const timeRemaining = expiryDate - Date.now();
         if (timeRemaining > 0) {
           expirationInfo = ` (${formatTimeRemaining(timeRemaining)} remaining)`;
         } else {
@@ -299,18 +345,18 @@ async function main() {
       if (licenseStatus.valid) {
         console.log(`${colors.green}✓ License valid: ${licenseStatus.message}${expirationInfo}${colors.reset}`);
         
-        // Show trial warning if applicable
-        if (licenseStatus.trial) {
-          console.log(`${colors.yellow}Note: You are using a trial license. Some features may be limited.${colors.reset}`);
-        }
-        
         // Show offline warning if applicable
         if (licenseStatus.offline) {
           console.log(`${colors.yellow}Note: Operating in offline mode. Please connect to the internet regularly to validate your license.${colors.reset}`);
         }
+        
+        // Show sender wallet if available
+        if (licenseStatus.senderWallet) {
+          console.log(`${colors.blue}Registered wallet: ${licenseStatus.senderWallet}${colors.reset}`);
+        }
       } else {
         console.log(`${colors.red}✗ License invalid: ${licenseStatus.message}${expirationInfo}${colors.reset}`);
-        console.log(`${colors.yellow}Please purchase a license at https://yourcompany.com/solana-mmaker/purchase${colors.reset}`);
+        console.log(`${colors.yellow}Please purchase a subscription from our website or contact support@koynlabs.com${colors.reset}`);
       }
     }
     
