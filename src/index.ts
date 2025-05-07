@@ -18,6 +18,7 @@ import { walletMonitorCommand } from './commands/walletMonitor';
 import { startBotCommand } from './commands/startBot';
 import { stopBotCommand } from './commands/stopBot';
 import { tokenMonitorCommand } from './commands/tokenMonitor';
+import { createTokenCommand } from './commands/createToken';
 import { validateRequiredConfig, showConfigurationError, checkOptionalConfig } from './utils/configValidator';
 import dotenv from 'dotenv';
 import { configureEnvCommand } from './commands/configureEnv';
@@ -103,6 +104,7 @@ async function showMainMenu() {
           { name: 'Create Profiles', value: 'create-profiles' },
           { name: 'Post PumpFun Replies', value: 'post-replies' },
           { name: 'Monitor New Tokens', value: 'token-monitor' },
+          { name: 'Create Token', value: 'create-token' },
           { name: 'Configure Environment', value: 'configure-env' },
           { name: 'Quit', value: 'quit' }
         ]
@@ -148,6 +150,9 @@ async function showMainMenu() {
         break;
       case 'token-monitor':
         await handleTokenMonitor();
+        break;
+      case 'create-token':
+        await handleCreateToken();
         break;
       case 'configure-env':
         await configureEnvCommand({ update: true });
@@ -902,6 +907,100 @@ async function handleTokenMonitor() {
   });
 }
 
+// Handle create token action
+async function handleCreateToken() {
+  console.clear();
+  showBanner();
+  console.log(chalk.cyan('== Create Token ==\n'));
+
+  const { name, symbol, description, logoPath, twitter, telegram, website, buys } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'name',
+      message: 'Token name:',
+      validate: (input) => {
+        if (!input) return 'Token name is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'symbol',
+      message: 'Token symbol:',
+      validate: (input) => {
+        if (!input) return 'Token symbol is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'description',
+      message: 'Token description:',
+      validate: (input) => {
+        if (!input) return 'Token description is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'logoPath',
+      message: 'Path to token logo image:',
+      validate: (input) => {
+        if (!input) return 'Token logo image path is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'twitter',
+      message: 'Twitter URL:',
+      validate: (input) => {
+        if (!input) return 'Twitter URL is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'telegram',
+      message: 'Telegram URL:',
+      validate: (input) => {
+        if (!input) return 'Telegram URL is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'website',
+      message: 'Website URL:',
+      validate: (input) => {
+        if (!input) return 'Website URL is required';
+        return true;
+      }
+    },
+    {
+      type: 'input',
+      name: 'buys',
+      message: 'Number of initial buy transactions (1-5):',
+      default: '1',
+      validate: (input) => {
+        const num = parseInt(input);
+        return !isNaN(num) && num >= 1 && num <= 5 ? true : 'Please enter a valid number between 1 and 5';
+      }
+    }
+  ]);
+
+  await createTokenCommand({
+    name,
+    symbol,
+    description,
+    logo: logoPath,
+    twitter,
+    telegram,
+    website,
+    buys: buys.toString()
+  });
+}
+
 // Command-line interface for backward compatibility
 function setupCommandLine() {
   const program = new Command();
@@ -1031,6 +1130,19 @@ function setupCommandLine() {
     .option('--randomize', 'Use random comments from comments.txt file', true)
     .option('--with-image', 'Include an image with your comments', false)
     .action(tokenMonitorCommand);
+  
+  program
+    .command('create-token')
+    .description('Create a new token on Solana using pump.fun')
+    .option('-n, --name <name>', 'Token name')
+    .option('-s, --symbol <symbol>', 'Token symbol')
+    .option('-d, --description <description>', 'Token description')
+    .option('-l, --logo <logoPath>', 'Path to token logo image')
+    .option('-t, --twitter <url>', 'Twitter URL')
+    .option('-g, --telegram <url>', 'Telegram URL')
+    .option('-w, --website <url>', 'Website URL')
+    .option('-b, --buys <number>', 'Number of initial buy transactions (1-5)')
+    .action(createTokenCommand);
   
   return program;
 }
