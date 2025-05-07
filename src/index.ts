@@ -18,6 +18,12 @@ import { walletMonitorCommand } from './commands/walletMonitor';
 import { startBotCommand } from './commands/startBot';
 import { stopBotCommand } from './commands/stopBot';
 import { tokenMonitorCommand } from './commands/tokenMonitor';
+import { validateRequiredConfig, showConfigurationError, checkOptionalConfig } from './utils/configValidator';
+import dotenv from 'dotenv';
+import { configureEnvCommand } from './commands/configureEnv';
+
+// Load environment variables
+dotenv.config();
 
 // ASCII Art banner
 function showBanner() {
@@ -34,8 +40,48 @@ function showBanner() {
   console.log(chalk.cyan('Live AI Based Strategy by Koynlabs\n'));
 }
 
+// Validate configuration before proceeding
+async function checkConfiguration(): Promise<boolean> {
+  const validationResult = validateRequiredConfig();
+  
+  if (!validationResult.isValid) {
+    showBanner();
+    showConfigurationError(validationResult);
+    
+    console.log(chalk.yellow('\nWould you like to configure your environment now? (Recommended)'));
+    const { shouldConfigure } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'shouldConfigure',
+        message: 'Set up configuration now?',
+        default: true
+      }
+    ]);
+    
+    if (shouldConfigure) {
+      await configureEnvCommand();
+      // Reload environment variables after configuration
+      dotenv.config();
+      // Check again
+      return validateRequiredConfig().isValid;
+    }
+    
+    return false;
+  }
+  
+  // Check for any missing optional configuration
+  checkOptionalConfig();
+  
+  return true;
+}
+
 // Interactive menu function
 async function showMainMenu() {
+  // Check if configuration is valid before proceeding
+  if (!await checkConfiguration()) {
+    process.exit(1);
+  }
+
   showBanner();
   
   while (true) {
@@ -57,6 +103,7 @@ async function showMainMenu() {
           { name: 'Create Profiles', value: 'create-profiles' },
           { name: 'Post PumpFun Replies', value: 'post-replies' },
           { name: 'Monitor New Tokens', value: 'token-monitor' },
+          { name: 'Configure Environment', value: 'configure-env' },
           { name: 'Quit', value: 'quit' }
         ]
       }
@@ -101,6 +148,9 @@ async function showMainMenu() {
         break;
       case 'token-monitor':
         await handleTokenMonitor();
+        break;
+      case 'configure-env':
+        await configureEnvCommand({ update: true });
         break;
     }
     
@@ -985,27 +1035,22 @@ function setupCommandLine() {
   return program;
 }
 
-// Main entry point
-if (require.main === module) {
-  try {
-    const program = setupCommandLine();
-    
-    // Force interactive mode if no arguments provided (e.g., when clicked directly)
-    if (process.argv.length <= 2 || process.argv[2] === 'interactive') {
-      console.log(chalk.green('🚀 Starting interactive mode...'));
-      showMainMenu().catch(error => {
-        console.error(chalk.red(`Error in interactive mode: ${error.message}`));
-        console.error(chalk.red('Stack trace:'), error.stack);
-        console.log(chalk.cyan('\nPress any key to exit...'));
-        process.stdin.setRawMode(true);
-        process.stdin.resume();
-        process.stdin.on('data', () => process.exit(1));
-      });
-    } else {
-      program.parse(process.argv);
-    }
-  } catch (error) {
-    console.error(chalk.red(`Unexpected error: ${error.message}`));
-    process.exit(1);
+// Main function
+async function main() {
+  const program = setupCommandLine();
+  
+  // If no args provided, show interactive menu
+  if (process.argv.length <= 2) {
+    await showMainMenu();
+    return;
   }
-} 
+  
+  // Otherwise, parse command line args
+  program.parse(process.argv);
+}
+
+// Run main
+main().catch((error) => {
+  console.error(chalk.red('Error:'), error.message);
+  process.exit(1);
+}); 

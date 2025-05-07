@@ -20,7 +20,6 @@
     "debug:build-run": "tsc --skipLibCheck --noEmitOnError false && node --inspect --no-warnings --enable-source-maps -r module-alias/register dist/index.js interactive",
     "package": "npm run build && pkg . --targets node18-macos-x64,node18-linux-x64,node18-win-x64 --output releases/labs-volume-bot --no-audit",
     "build-release": "node build-release.js",
-    "generate-license": "node scripts/generate-license.js",
     "clean": "rm -rf dist node_modules package-lock.json",
     "postinstall": "tsc --skipLibCheck --noEmitOnError false -p tsconfig.json && npx patch-package"
   },

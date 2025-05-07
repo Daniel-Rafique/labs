@@ -12,6 +12,21 @@ A Solana automation tool for managing volume and engagement on pump.fun.
 - **Automatic Transfers**: Efficiently move funds between wallets
 - **Dust Collection**: Gather small balances from multiple wallets
 
+## Requirements
+
+Before installation, you'll need to have these items ready:
+
+1. **Solana RPC URL** - A dedicated or public RPC endpoint for Solana
+   - Example: `https://api.mainnet-beta.solana.com`
+   - For better performance, consider a paid RPC provider like QuickNode or Helius
+
+2. **OpenAI API Key** - Required for AI-driven content generation
+   - Get one from [OpenAI Platform](https://platform.openai.com/api-keys)
+
+3. **License Key** - Valid license for this software
+   - Contact support@koynlabs.com to obtain a license key
+   - A trial license can be generated during installation
+
 ## Installation
 
 1. Extract this package to a directory of your choice
@@ -28,10 +43,31 @@ A Solana automation tool for managing volume and engagement on pump.fun.
    install.bat
    ```
 
-3. Start the application:
+3. During installation, you will be prompted to:
+   - Enter your Solana RPC URL
+   - Provide your OpenAI API key
+   - Enter your license key (or generate a trial)
+
+4. Start the application:
    ```bash
    npm run labs
    ```
+
+## Configuration
+
+The application uses a `.env` file for configuration. You can edit this file directly if needed:
+
+```
+# Solana RPC endpoint
+SOLANA_RPC_URL=https://your-rpc-url.com
+
+# API keys
+OPENAI_API_KEY=your-openai-key
+
+# Optional settings
+# OFFLINE_MODE=true  # Run without license verification
+# AUTO_ACTIVATE=true # Automatically activate license on new machine
+```
 
 ## Usage
 

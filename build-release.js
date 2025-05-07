@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 const crypto = require('crypto');
+const chalk = require('chalk');
+const figlet = require('figlet');
 
 console.log('🚀 Starting enhanced release build process...');
 
@@ -486,15 +488,25 @@ const integrityCheckCode = `
 try {
   const licenseManager = require('./lib/license-manager');
   const integrityChecker = require('./lib/integrity-checker');
+  const chalk = require('chalk');
+  const figlet = require('figlet');
   
   // Initialize integrity checker
   integrityChecker.initialize();
+  
+  // Show license banner
+  console.log(
+    chalk.cyan(
+      figlet.textSync('LABS', { horizontalLayout: 'fitted' }) +
+      '\\nLive AI Based Strategy by Koynlabs'
+    )
+  );
   
   // Schedule periodic integrity checks
   setInterval(() => {
     const integrityResult = integrityChecker.verifyIntegrity();
     if (!integrityResult.intact) {
-      console.error('⚠️ Application integrity check failed. The application may have been tampered with.');
+      console.error(chalk.red('⚠️ Application integrity check failed. The application may have been tampered with.'));
       // In a real scenario, you might want to exit or disable functionality
       // process.exit(1);
     }
@@ -503,12 +515,45 @@ try {
   // Initialize license manager
   licenseManager.initialize().then(status => {
     if (status !== 'VALID' && status !== 'OFFLINE_MODE') {
-      console.warn(\`⚠️ License status: \${status}. Some features may be disabled.\`);
+      console.warn(chalk.yellow('⚠️ License status: ' + status));
+      console.warn(chalk.yellow('Some features may be disabled.'));
+      
+      if (status === 'NO_LICENSE') {
+        console.log(
+          chalk.red('\\n' +
+          '╔════════════════════════════════════════════════════════════╗\\n' +
+          '║                   LICENSE REQUIRED                         ║\\n' +
+          '╚════════════════════════════════════════════════════════════╝')
+        );
+        console.log(chalk.white('\\nThis software requires a valid license key to operate properly.'));
+        console.log(chalk.white('To obtain a license key, please contact: ' + chalk.cyan('support@koynlabs.com')));
+        console.log(chalk.white('\\nYour Machine ID: ' + chalk.cyan(licenseManager.getMachineId())));
+        console.log(chalk.white('\\nPlace your license key in a file named "license.key" in this directory'));
+        console.log(chalk.white('or set the LICENSE_KEY environment variable.'));
+      }
     } else {
-      console.log('✅ License validated successfully.');
+      console.log(chalk.green('✅ License validated successfully.'));
+      // Check if required configuration exists
+      try {
+        const dotenv = require('dotenv');
+        dotenv.config();
+        
+        if (!process.env.SOLANA_RPC) {
+          console.warn(chalk.yellow('⚠️ Missing Solana RPC URL in configuration.'));
+          console.log(chalk.white('Set SOLANA_RPC in your .env file or environment variables.'));
+        }
+        
+        if (!process.env.OPENAI_API_KEY) {
+          console.warn(chalk.yellow('⚠️ Missing OpenAI API key in configuration.'));
+          console.log(chalk.white('Some features may not work without an OpenAI API key.'));
+          console.log(chalk.white('Set OPENAI_API_KEY in your .env file or environment variables.'));
+        }
+      } catch (configError) {
+        console.warn(chalk.yellow('⚠️ Error checking configuration: ' + configError.message));
+      }
     }
   }).catch(err => {
-    console.error('License initialization error:', err.message);
+    console.error(chalk.red('License initialization error: ' + err.message));
   });
 } catch (error) {
   console.error('Initialization error:', error.message);
@@ -614,7 +659,7 @@ fs.writeFileSync('./dist-npmrc', npmrcContent);
 
 // Step 7: Create a simple README for distribution
 console.log('📝 Creating distribution README...');
-const readmeContent = `# ${appName} ${releaseVersion}
+const readmeContent = `# labs v${version}
 
 A Solana automation tool for managing volume and engagement on pump.fun.
 
@@ -660,6 +705,42 @@ This software requires a valid license key. Please place your license key in the
 ## Support
 
 For questions, issues, or to obtain a license, please contact support@koynlabs.com
+
+// Create a sample .env file example
+console.log('📝 Creating env-example file...');
+fs.writeFileSync('./env-example', 
+  '# Labs Volume Bot Configuration\n' +
+  '# Replace these example values with your actual credentials\n\n' +
+  '# Required: Primary Solana RPC URL (Get one from QuickNode, Helius, Alchemy, etc.)\n' +
+  'SOLANA_RPC=https://api.mainnet-beta.solana.com\n\n' +
+  '# Secondary Solana RPC URL for redundancy\n' +
+  'SOLANA_RPC_2=https://api.mainnet-beta.solana.com\n\n' +
+  '# Required: OpenAI API Key for AI-generated comments and profiles\n' +
+  '# Get one from: https://platform.openai.com/api-keys\n' +
+  'OPENAI_API_KEY=your-openai-api-key-here\n\n' +
+  '# Required: License key for accessing all features\n' +
+  '# This key is provided with your purchase\n' +
+  'LICENSE_KEY=your-license-key-here\n\n' +
+  '# Trading configuration (set by startBot command)\n' +
+  'CONTRACT_ADDRESS=\n' +
+  'TOKEN_MINT_ADDRESS=\n' +
+  'TOKEN_SYMBOL=TOKEN\n' +
+  'MAX_TRADE_AMOUNT=0.005\n' +
+  'MIN_TRADE_AMOUNT=0.0005\n' +
+  'TIME_BETWEEN_BUYS=5000\n' +
+  'NUMBER_OF_BUYS=3\n' +
+  'NUMBER_OF_CYCLES=1\n' +
+  'JITO=false\n' +
+  'ENABLE_TRADING=true\n' +
+  'TRADE_TYPE=sol_spl\n\n' +
+  '# Optional: Set to "true" to enable debug logging\n' +
+  'DEBUG=false\n\n' +
+  '# Optional: Set to "true" for offline mode (limited license validation)\n' +
+  '# OFFLINE_MODE=false\n\n' +
+  '# Optional: Set to "true" to automatically activate license on new machines\n' +
+  '# AUTO_ACTIVATE=false\n\n' +
+  '# Optional: Default configuration directory (default: .config)\n' +
+  '# CONFIG_DIR=.config');
 `;
 
 fs.writeFileSync('./dist-README.md', readmeContent);
@@ -667,42 +748,54 @@ fs.writeFileSync('./dist-README.md', readmeContent);
 // Step 8: Create a simple installation script
 console.log('🛠️ Creating installation script...');
 const installScriptContent = `#!/bin/bash
-# Installation script for ${appName}
+# Installation script for labs
 
-echo "Installing ${appName}..."
+echo "Installing labs v${version}..."
 npm install --omit=dev
 echo "Installation complete!"
 echo "Run 'npm run labs' to start the application."
 `;
 
-fs.writeFileSync('./dist-install.sh', installScriptContent);
+fs.writeFileSync('./install.sh', installScriptContent);
 
 // Windows batch version
 const installBatchContent = `@echo off
-REM Installation script for ${appName}
+REM Installation script for labs
 
-echo Installing ${appName}...
+echo Installing labs v${version}...
 call npm install --omit=dev
 echo Installation complete!
 echo Run 'npm run labs' to start the application.
 pause
 `;
 
-fs.writeFileSync('./dist-install.bat', installBatchContent);
+fs.writeFileSync('./install.bat', installBatchContent);
 
 // Make scripts executable
-execSync('chmod +x ./dist-install.sh', { stdio: 'inherit' });
+execSync('chmod +x ./install.sh', { stdio: 'inherit' });
 
 // Step 9: Create license file template
 console.log('📜 Creating license file template...');
 const licenseFileContent = `
-This is a placeholder for your license key.
-Replace this content with your actual license key.
+################################################################
+#                  LICENSE KEY REQUIRED                        #
+################################################################
 
-For activation, please contact support@koynlabs.com with your machine ID.
+This software requires a valid license key to operate.
 
-You can find your machine ID by running:
-node -e "const { getLicenseStatus } = require('./dist/lib/license-manager'); console.log(getLicenseStatus().machineId);"
+To obtain a license key, please contact:
+support@koynlabs.com
+
+Please provide the following machine ID when requesting a license:
+(Run the following command after installation)
+
+node -e "const licenseManager = require('./dist/lib/license-manager'); console.log(licenseManager.getMachineId())"
+
+During installation, you can either:
+1. Enter your license key when prompted
+2. Generate a time-limited trial license
+
+################################################################
 `;
 
 fs.writeFileSync('./dist-license.key', licenseFileContent);
@@ -711,7 +804,7 @@ fs.writeFileSync('./dist-license.key', licenseFileContent);
 console.log('📦 Creating distribution package...');
 
 // Create a directory to hold all the distribution files
-const distDirName = `${appName}-${releaseVersion}`;
+const distDirName = `labs-${version}`;
 const distDir = path.join('./releases', distDirName);
 
 // Clean up any existing directory
@@ -727,10 +820,11 @@ execSync(`cp -r ./dist "${distDir}/"`, { stdio: 'inherit' });
 execSync(`cp -r ./node_modules "${distDir}/"`, { stdio: 'inherit' });
 execSync(`cp ./dist-package.json "${distDir}/package.json"`, { stdio: 'inherit' });
 execSync(`cp ./dist-README.md "${distDir}/README.md"`, { stdio: 'inherit' });
-execSync(`cp ./dist-install.sh "${distDir}/install.sh"`, { stdio: 'inherit' });
-execSync(`cp ./dist-install.bat "${distDir}/install.bat"`, { stdio: 'inherit' });
+execSync(`cp ./install.sh "${distDir}/install.sh"`, { stdio: 'inherit' });
+execSync(`cp ./install.bat "${distDir}/install.bat"`, { stdio: 'inherit' });
 execSync(`cp ./dist-license.key "${distDir}/license.key"`, { stdio: 'inherit' });
 execSync(`cp ./dist-npmrc "${distDir}/.npmrc"`, { stdio: 'inherit' });
+execSync(`cp ./env-example "${distDir}/.env.example"`, { stdio: 'inherit' });
 
 // Make bin directory and scripts executable
 execSync(`mkdir -p "${distDir}/bin"`, { stdio: 'inherit' });
@@ -739,7 +833,7 @@ execSync(`chmod +x "${distDir}/bin/cli.js"`, { stdio: 'inherit' });
 
 // Step 11: Create a zip file
 console.log('🗜️ Creating ZIP archive...');
-const zipFilePath = path.join('./releases', `${appName}-${releaseVersion}.zip`);
+const zipFilePath = path.join('./releases', `labs-${version}.zip`);
 
 // Create a file to stream archive data to
 const output = fs.createWriteStream(zipFilePath);
@@ -754,8 +848,8 @@ output.on('close', function() {
   // Clean up temporary files
   fs.unlinkSync('./dist-package.json');
   fs.unlinkSync('./dist-README.md');
-  fs.unlinkSync('./dist-install.sh');
-  fs.unlinkSync('./dist-install.bat');
+  fs.unlinkSync('./install.sh');
+  fs.unlinkSync('./install.bat');
   fs.unlinkSync('./dist-license.key');
   fs.unlinkSync('./dist-npmrc');
   
@@ -781,7 +875,7 @@ archive.on('error', function(err) {
 archive.pipe(output);
 
 // Add the distribution directory to the archive
-archive.directory(distDir, distDirName);
+archive.directory(distDir, 'labs');
 
 // Finalize the archive
 archive.finalize(); 

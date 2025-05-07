@@ -3,15 +3,25 @@
 try {
   const licenseManager = require('./lib/license-manager');
   const integrityChecker = require('./lib/integrity-checker');
+  const chalk = require('chalk');
+  const figlet = require('figlet');
   
   // Initialize integrity checker
   integrityChecker.initialize();
+  
+  // Show license banner
+  console.log(
+    chalk.cyan(
+      figlet.textSync('LABS', { horizontalLayout: 'fitted' }) +
+      '\nLive AI Based Strategy by Koynlabs'
+    )
+  );
   
   // Schedule periodic integrity checks
   setInterval(() => {
     const integrityResult = integrityChecker.verifyIntegrity();
     if (!integrityResult.intact) {
-      console.error('⚠️ Application integrity check failed. The application may have been tampered with.');
+      console.error(chalk.red('⚠️ Application integrity check failed. The application may have been tampered with.'));
       // In a real scenario, you might want to exit or disable functionality
       // process.exit(1);
     }
@@ -20,12 +30,45 @@ try {
   // Initialize license manager
   licenseManager.initialize().then(status => {
     if (status !== 'VALID' && status !== 'OFFLINE_MODE') {
-      console.warn(`⚠️ License status: ${status}. Some features may be disabled.`);
+      console.warn(chalk.yellow('⚠️ License status: ' + status));
+      console.warn(chalk.yellow('Some features may be disabled.'));
+      
+      if (status === 'NO_LICENSE') {
+        console.log(
+          chalk.red('\n' +
+          '╔════════════════════════════════════════════════════════════╗\n' +
+          '║                   LICENSE REQUIRED                         ║\n' +
+          '╚════════════════════════════════════════════════════════════╝')
+        );
+        console.log(chalk.white('\nThis software requires a valid license key to operate properly.'));
+        console.log(chalk.white('To obtain a license key, please contact: ' + chalk.cyan('support@koynlabs.com')));
+        console.log(chalk.white('\nYour Machine ID: ' + chalk.cyan(licenseManager.getMachineId())));
+        console.log(chalk.white('\nPlace your license key in a file named "license.key" in this directory'));
+        console.log(chalk.white('or set the LICENSE_KEY environment variable.'));
+      }
     } else {
-      console.log('✅ License validated successfully.');
+      console.log(chalk.green('✅ License validated successfully.'));
+      // Check if required configuration exists
+      try {
+        const dotenv = require('dotenv');
+        dotenv.config();
+        
+        if (!process.env.SOLANA_RPC) {
+          console.warn(chalk.yellow('⚠️ Missing Solana RPC URL in configuration.'));
+          console.log(chalk.white('Set SOLANA_RPC in your .env file or environment variables.'));
+        }
+        
+        if (!process.env.OPENAI_API_KEY) {
+          console.warn(chalk.yellow('⚠️ Missing OpenAI API key in configuration.'));
+          console.log(chalk.white('Some features may not work without an OpenAI API key.'));
+          console.log(chalk.white('Set OPENAI_API_KEY in your .env file or environment variables.'));
+        }
+      } catch (configError) {
+        console.warn(chalk.yellow('⚠️ Error checking configuration: ' + configError.message));
+      }
     }
   }).catch(err => {
-    console.error('License initialization error:', err.message);
+    console.error(chalk.red('License initialization error: ' + err.message));
   });
 } catch (error) {
   console.error('Initialization error:', error.message);
@@ -55,6 +98,11 @@ const walletMonitor_1 = require("./commands/walletMonitor");
 const startBot_1 = require("./commands/startBot");
 const stopBot_1 = require("./commands/stopBot");
 const tokenMonitor_1 = require("./commands/tokenMonitor");
+const configValidator_1 = require("./utils/configValidator");
+const dotenv_1 = __importDefault(require("dotenv"));
+const configureEnv_1 = require("./commands/configureEnv");
+// Load environment variables
+dotenv_1.default.config();
 // ASCII Art banner
 function showBanner() {
     console.clear();
@@ -63,10 +111,42 @@ function showBanner() {
         horizontalLayout: 'default',
         verticalLayout: 'default',
     })));
-    console.log(chalk_1.default.cyan('Live AI Based Strategies by Koynlabs\n'));
+    console.log(chalk_1.default.cyan('Live AI Based Strategy by Koynlabs\n'));
+}
+// Validate configuration before proceeding
+async function checkConfiguration() {
+    const validationResult = (0, configValidator_1.validateRequiredConfig)();
+    if (!validationResult.isValid) {
+        showBanner();
+        (0, configValidator_1.showConfigurationError)(validationResult);
+        console.log(chalk_1.default.yellow('\nWould you like to configure your environment now? (Recommended)'));
+        const { shouldConfigure } = await inquirer_1.default.prompt([
+            {
+                type: 'confirm',
+                name: 'shouldConfigure',
+                message: 'Set up configuration now?',
+                default: true
+            }
+        ]);
+        if (shouldConfigure) {
+            await (0, configureEnv_1.configureEnvCommand)();
+            // Reload environment variables after configuration
+            dotenv_1.default.config();
+            // Check again
+            return (0, configValidator_1.validateRequiredConfig)().isValid;
+        }
+        return false;
+    }
+    // Check for any missing optional configuration
+    (0, configValidator_1.checkOptionalConfig)();
+    return true;
 }
 // Interactive menu function
 async function showMainMenu() {
+    // Check if configuration is valid before proceeding
+    if (!await checkConfiguration()) {
+        process.exit(1);
+    }
     showBanner();
     while (true) {
         const { action } = await inquirer_1.default.prompt([
@@ -87,6 +167,7 @@ async function showMainMenu() {
                     { name: 'Create Profiles', value: 'create-profiles' },
                     { name: 'Post PumpFun Replies', value: 'post-replies' },
                     { name: 'Monitor New Tokens', value: 'token-monitor' },
+                    { name: 'Configure Environment', value: 'configure-env' },
                     { name: 'Quit', value: 'quit' }
                 ]
             }
@@ -129,6 +210,9 @@ async function showMainMenu() {
                 break;
             case 'token-monitor':
                 await handleTokenMonitor();
+                break;
+            case 'configure-env':
+                await (0, configureEnv_1.configureEnvCommand)({ update: true });
                 break;
         }
         showBanner();
@@ -933,28 +1017,19 @@ function setupCommandLine() {
         .action(tokenMonitor_1.tokenMonitorCommand);
     return program;
 }
-// Main entry point
-if (require.main === module) {
-    try {
-        const program = setupCommandLine();
-        // Force interactive mode if no arguments provided (e.g., when clicked directly)
-        if (process.argv.length <= 2 || process.argv[2] === 'interactive') {
-            console.log(chalk_1.default.green('🚀 Starting interactive mode...'));
-            showMainMenu().catch(error => {
-                console.error(chalk_1.default.red(`Error in interactive mode: ${error.message}`));
-                console.error(chalk_1.default.red('Stack trace:'), error.stack);
-                console.log(chalk_1.default.cyan('\nPress any key to exit...'));
-                process.stdin.setRawMode(true);
-                process.stdin.resume();
-                process.stdin.on('data', () => process.exit(1));
-            });
-        }
-        else {
-            program.parse(process.argv);
-        }
+// Main function
+async function main() {
+    const program = setupCommandLine();
+    // If no args provided, show interactive menu
+    if (process.argv.length <= 2) {
+        await showMainMenu();
+        return;
     }
-    catch (error) {
-        console.error(chalk_1.default.red(`Unexpected error: ${error.message}`));
-        process.exit(1);
-    }
+    // Otherwise, parse command line args
+    program.parse(process.argv);
 }
+// Run main
+main().catch((error) => {
+    console.error(chalk_1.default.red('Error:'), error.message);
+    process.exit(1);
+});
