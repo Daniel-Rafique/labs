@@ -98,9 +98,13 @@ const walletMonitor_1 = require("./commands/walletMonitor");
 const startBot_1 = require("./commands/startBot");
 const stopBot_1 = require("./commands/stopBot");
 const tokenMonitor_1 = require("./commands/tokenMonitor");
+const createToken_1 = require("./commands/createToken");
+const setupProxy_1 = require("./commands/setupProxy");
 const configValidator_1 = require("./utils/configValidator");
 const dotenv_1 = __importDefault(require("dotenv"));
 const configureEnv_1 = require("./commands/configureEnv");
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 // Load environment variables
 dotenv_1.default.config();
 // ASCII Art banner
@@ -133,13 +137,63 @@ async function checkConfiguration() {
             // Reload environment variables after configuration
             dotenv_1.default.config();
             // Check again
-            return (0, configValidator_1.validateRequiredConfig)().isValid;
+            const configValid = (0, configValidator_1.validateRequiredConfig)().isValid;
+            // If configuration is valid, ensure wallets exist
+            if (configValid) {
+                await ensureDefaultWalletsExist();
+            }
+            return configValid;
         }
         return false;
     }
     // Check for any missing optional configuration
     (0, configValidator_1.checkOptionalConfig)();
+    // Ensure wallets exist
+    await ensureDefaultWalletsExist();
     return true;
+}
+/**
+ * Ensures that default wallets exist, creating them if needed
+ */
+async function ensureDefaultWalletsExist() {
+    // Get project root directory
+    const projectRootDir = path_1.default.resolve(__dirname, '../');
+    // Check .config directory for wallets.json
+    const configDir = path_1.default.join(projectRootDir, '.config');
+    const walletPath = path_1.default.join(configDir, 'wallets.json');
+    // Create .config directory if it doesn't exist
+    if (!fs_1.default.existsSync(configDir)) {
+        fs_1.default.mkdirSync(configDir, { recursive: true });
+    }
+    // Check if wallets file exists and has valid data
+    let needToCreateWallets = false;
+    if (!fs_1.default.existsSync(walletPath)) {
+        needToCreateWallets = true;
+    }
+    else {
+        try {
+            const data = fs_1.default.readFileSync(walletPath, 'utf8');
+            const wallets = JSON.parse(data);
+            if (!Array.isArray(wallets) || wallets.length === 0) {
+                needToCreateWallets = true;
+            }
+        }
+        catch (error) {
+            // If file exists but can't be parsed, create new wallets
+            needToCreateWallets = true;
+        }
+    }
+    // Create default wallets if needed
+    if (needToCreateWallets) {
+        console.log(chalk_1.default.blue('Creating default wallets...'));
+        try {
+            await (0, createWallets_1.createWalletsCommand)({ number: '10' });
+            console.log(chalk_1.default.green('Created 10 wallets successfully.'));
+        }
+        catch (error) {
+            console.error(chalk_1.default.red(`Error creating default wallets: ${error.message}`));
+        }
+    }
 }
 // Interactive menu function
 async function showMainMenu() {
@@ -154,7 +208,7 @@ async function showMainMenu() {
                 type: 'list',
                 name: 'action',
                 message: 'Select an action:',
-                pageSize: 12, // Ensure all options are visible
+                pageSize: 14, // Increased to show all options
                 choices: [
                     { name: 'Create Wallets', value: 'create-wallets' },
                     { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
@@ -167,7 +221,9 @@ async function showMainMenu() {
                     { name: 'Create Profiles', value: 'create-profiles' },
                     { name: 'Post PumpFun Replies', value: 'post-replies' },
                     { name: 'Monitor New Tokens', value: 'token-monitor' },
+                    { name: 'Create Token', value: 'create-token' },
                     { name: 'Configure Environment', value: 'configure-env' },
+                    { name: 'Setup Proxies', value: 'setup-proxies' },
                     { name: 'Quit', value: 'quit' }
                 ]
             }
@@ -211,8 +267,14 @@ async function showMainMenu() {
             case 'token-monitor':
                 await handleTokenMonitor();
                 break;
+            case 'create-token':
+                await handleCreateToken();
+                break;
             case 'configure-env':
                 await (0, configureEnv_1.configureEnvCommand)({ update: true });
+                break;
+            case 'setup-proxies':
+                await handleSetupProxies();
                 break;
         }
         showBanner();
@@ -901,13 +963,165 @@ async function handleTokenMonitor() {
         withImage: includeImage
     });
 }
+// Handle create token action
+async function handleCreateToken() {
+    console.clear();
+    showBanner();
+    console.log(chalk_1.default.cyan('== Create Token ==\n'));
+    const { name, symbol, description, logoPath, twitter, telegram, website, buys } = await inquirer_1.default.prompt([
+        {
+            type: 'input',
+            name: 'name',
+            message: 'Token name:',
+            validate: (input) => {
+                if (!input)
+                    return 'Token name is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'symbol',
+            message: 'Token symbol:',
+            validate: (input) => {
+                if (!input)
+                    return 'Token symbol is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'description',
+            message: 'Token description:',
+            validate: (input) => {
+                if (!input)
+                    return 'Token description is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'logoPath',
+            message: 'Path to token logo image:',
+            validate: (input) => {
+                if (!input)
+                    return 'Token logo image path is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'twitter',
+            message: 'Twitter URL:',
+            validate: (input) => {
+                if (!input)
+                    return 'Twitter URL is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'telegram',
+            message: 'Telegram URL:',
+            validate: (input) => {
+                if (!input)
+                    return 'Telegram URL is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'website',
+            message: 'Website URL:',
+            validate: (input) => {
+                if (!input)
+                    return 'Website URL is required';
+                return true;
+            }
+        },
+        {
+            type: 'input',
+            name: 'buys',
+            message: 'Number of initial buy transactions (1-5):',
+            default: '1',
+            validate: (input) => {
+                const num = parseInt(input);
+                return !isNaN(num) && num >= 1 && num <= 5 ? true : 'Please enter a valid number between 1 and 5';
+            }
+        }
+    ]);
+    await (0, createToken_1.createTokenCommand)({
+        name,
+        symbol,
+        description,
+        logo: logoPath,
+        twitter,
+        telegram,
+        website,
+        buys: buys.toString()
+    });
+}
+// Handle proxy setup action
+async function handleSetupProxies() {
+    console.clear();
+    showBanner();
+    console.log(chalk_1.default.cyan('== Proxy Configuration ==\n'));
+    // Display proxy setup menu
+    while (true) {
+        const { action } = await inquirer_1.default.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: 'Proxy Setup Options:',
+                choices: [
+                    { name: 'Configure Oxylabs Residential Proxies', value: 'oxylabs' },
+                    { name: 'Configure Manual Proxy Settings', value: 'manual' },
+                    { name: 'Test Proxy Connection', value: 'test' },
+                    { name: 'Disable Proxies', value: 'disable' },
+                    { name: 'Back to Main Menu', value: 'back' }
+                ]
+            }
+        ]);
+        if (action === 'back') {
+            return;
+        }
+        // Call the proxy setup command with appropriate options
+        try {
+            switch (action) {
+                case 'oxylabs':
+                    await (0, setupProxy_1.setupProxyCommand)({ service: 'oxylabs' });
+                    break;
+                case 'manual':
+                    await (0, setupProxy_1.setupProxyCommand)({ service: 'manual' });
+                    break;
+                case 'test':
+                    await (0, setupProxy_1.setupProxyCommand)({ test: true });
+                    break;
+                case 'disable':
+                    await (0, setupProxy_1.setupProxyCommand)({ service: 'disable' });
+                    break;
+            }
+        }
+        catch (error) {
+            console.error(chalk_1.default.red(`Error setting up proxies: ${error.message}`));
+        }
+        // Pause to view results
+        await inquirer_1.default.prompt([
+            {
+                type: 'input',
+                name: 'continue',
+                message: 'Press Enter to continue...'
+            }
+        ]);
+    }
+}
 // Command-line interface for backward compatibility
 function setupCommandLine() {
     const program = new commander_1.Command();
     program
         .name('labs')
-        .description('Labs - Solana Trading Tools')
-        .version('1.0.0');
+        .description('AI Based Solana Trading Bot and Marketing Management Tool')
+        .version('1.1.0');
     // Set the default command to interactive mode
     program
         .action(() => {
@@ -1015,6 +1229,28 @@ function setupCommandLine() {
         .option('--randomize', 'Use random comments from comments.txt file', true)
         .option('--with-image', 'Include an image with your comments', false)
         .action(tokenMonitor_1.tokenMonitorCommand);
+    program
+        .command('create-token')
+        .description('Create a new token on Solana using pump.fun')
+        .option('-n, --name <name>', 'Token name')
+        .option('-s, --symbol <symbol>', 'Token symbol')
+        .option('-d, --description <description>', 'Token description')
+        .option('-l, --logo <logoPath>', 'Path to token logo image')
+        .option('-t, --twitter <url>', 'Twitter URL')
+        .option('-g, --telegram <url>', 'Telegram URL')
+        .option('-w, --website <url>', 'Website URL')
+        .option('-b, --buys <number>', 'Number of initial buy transactions (1-5)')
+        .action(createToken_1.createTokenCommand);
+    program
+        .command('setup-proxy')
+        .description('Configure proxy settings for the trading bot')
+        .option('-s, --service <type>', 'Proxy service type (oxylabs, manual, disable)')
+        .option('-u, --username <username>', 'Proxy username')
+        .option('-p, --password <password>', 'Proxy password')
+        .option('-t, --test', 'Test proxy connection')
+        .action(async (options) => {
+        await (0, setupProxy_1.setupProxyCommand)(options);
+    });
     return program;
 }
 // Main function

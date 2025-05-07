@@ -7,6 +7,8 @@ interface StartBotOptions {
     numBuys?: string;
     directory?: string;
     numCycles?: string;
+    useAi?: boolean;
+    useProxies?: boolean;
 }
 export declare function startBotCommand(options: StartBotOptions): Promise<void>;
 export {};

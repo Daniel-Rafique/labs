@@ -19,9 +19,12 @@ import { startBotCommand } from './commands/startBot';
 import { stopBotCommand } from './commands/stopBot';
 import { tokenMonitorCommand } from './commands/tokenMonitor';
 import { createTokenCommand } from './commands/createToken';
+import { setupProxyCommand } from './commands/setupProxy';
 import { validateRequiredConfig, showConfigurationError, checkOptionalConfig } from './utils/configValidator';
 import dotenv from 'dotenv';
 import { configureEnvCommand } from './commands/configureEnv';
+import path from 'path';
+import fs from 'fs';
 
 // Load environment variables
 dotenv.config();
@@ -64,7 +67,14 @@ async function checkConfiguration(): Promise<boolean> {
       // Reload environment variables after configuration
       dotenv.config();
       // Check again
-      return validateRequiredConfig().isValid;
+      const configValid = validateRequiredConfig().isValid;
+      
+      // If configuration is valid, ensure wallets exist
+      if (configValid) {
+        await ensureDefaultWalletsExist();
+      }
+      
+      return configValid;
     }
     
     return false;
@@ -73,7 +83,57 @@ async function checkConfiguration(): Promise<boolean> {
   // Check for any missing optional configuration
   checkOptionalConfig();
   
+  // Ensure wallets exist
+  await ensureDefaultWalletsExist();
+  
   return true;
+}
+
+/**
+ * Ensures that default wallets exist, creating them if needed
+ */
+async function ensureDefaultWalletsExist(): Promise<void> {
+  // Get project root directory
+  const projectRootDir = path.resolve(__dirname, '../');
+  
+  // Check .config directory for wallets.json
+  const configDir = path.join(projectRootDir, '.config');
+  const walletPath = path.join(configDir, 'wallets.json');
+  
+  // Create .config directory if it doesn't exist
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  
+  // Check if wallets file exists and has valid data
+  let needToCreateWallets = false;
+  
+  if (!fs.existsSync(walletPath)) {
+    needToCreateWallets = true;
+  } else {
+    try {
+      const data = fs.readFileSync(walletPath, 'utf8');
+      const wallets = JSON.parse(data);
+      
+      if (!Array.isArray(wallets) || wallets.length === 0) {
+        needToCreateWallets = true;
+      }
+    } catch (error) {
+      // If file exists but can't be parsed, create new wallets
+      needToCreateWallets = true;
+    }
+  }
+  
+  // Create default wallets if needed
+  if (needToCreateWallets) {
+    console.log(chalk.blue('Creating default wallets...'));
+    try {
+      await createWalletsCommand({ number: '10' });
+      console.log(chalk.green('Created 10 wallets successfully.'));
+    } catch (error: any) {
+      console.error(chalk.red(`Error creating default wallets: ${error.message}`));
+    }
+  }
 }
 
 // Interactive menu function
@@ -91,7 +151,7 @@ async function showMainMenu() {
         type: 'list',
         name: 'action',
         message: 'Select an action:',
-        pageSize: 12, // Ensure all options are visible
+        pageSize: 14, // Increased to show all options
         choices: [
           { name: 'Create Wallets', value: 'create-wallets' },
           { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
@@ -106,6 +166,7 @@ async function showMainMenu() {
           { name: 'Monitor New Tokens', value: 'token-monitor' },
           { name: 'Create Token', value: 'create-token' },
           { name: 'Configure Environment', value: 'configure-env' },
+          { name: 'Setup Proxies', value: 'setup-proxies' },
           { name: 'Quit', value: 'quit' }
         ]
       }
@@ -156,6 +217,9 @@ async function showMainMenu() {
         break;
       case 'configure-env':
         await configureEnvCommand({ update: true });
+        break;
+      case 'setup-proxies':
+        await handleSetupProxies();
         break;
     }
     
@@ -1001,14 +1065,72 @@ async function handleCreateToken() {
   });
 }
 
+// Handle proxy setup action
+async function handleSetupProxies() {
+  console.clear();
+  showBanner();
+  console.log(chalk.cyan('== Proxy Configuration ==\n'));
+
+  // Display proxy setup menu
+  while (true) {
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'Proxy Setup Options:',
+        choices: [
+          { name: 'Configure Oxylabs Residential Proxies', value: 'oxylabs' },
+          { name: 'Configure Manual Proxy Settings', value: 'manual' },
+          { name: 'Test Proxy Connection', value: 'test' },
+          { name: 'Disable Proxies', value: 'disable' },
+          { name: 'Back to Main Menu', value: 'back' }
+        ]
+      }
+    ]);
+
+    if (action === 'back') {
+      return;
+    }
+
+    // Call the proxy setup command with appropriate options
+    try {
+      switch (action) {
+        case 'oxylabs':
+          await setupProxyCommand({ service: 'oxylabs' });
+          break;
+        case 'manual':
+          await setupProxyCommand({ service: 'manual' });
+          break;
+        case 'test':
+          await setupProxyCommand({ test: true });
+          break;
+        case 'disable':
+          await setupProxyCommand({ service: 'disable' });
+          break;
+      }
+    } catch (error: any) {
+      console.error(chalk.red(`Error setting up proxies: ${error.message}`));
+    }
+
+    // Pause to view results
+    await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'continue',
+        message: 'Press Enter to continue...'
+      }
+    ]);
+  }
+}
+
 // Command-line interface for backward compatibility
 function setupCommandLine() {
   const program = new Command();
   
   program
     .name('labs')
-    .description('Labs - Solana Trading Tools')
-    .version('1.0.0');
+    .description('AI Based Solana Trading Bot and Marketing Management Tool')
+    .version('1.1.0');
   
   // Set the default command to interactive mode
   program
@@ -1143,6 +1265,17 @@ function setupCommandLine() {
     .option('-w, --website <url>', 'Website URL')
     .option('-b, --buys <number>', 'Number of initial buy transactions (1-5)')
     .action(createTokenCommand);
+  
+  program
+    .command('setup-proxy')
+    .description('Configure proxy settings for the trading bot')
+    .option('-s, --service <type>', 'Proxy service type (oxylabs, manual, disable)')
+    .option('-u, --username <username>', 'Proxy username')
+    .option('-p, --password <password>', 'Proxy password')
+    .option('-t, --test', 'Test proxy connection')
+    .action(async (options) => {
+      await setupProxyCommand(options);
+    });
   
   return program;
 }

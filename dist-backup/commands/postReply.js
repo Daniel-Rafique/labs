@@ -34,8 +34,8 @@ const axios_1 = __importDefault(require("axios"));
 const path = __importStar(require("path"));
 const wallet_1 = require("../utils/wallet");
 const transaction_1 = require("../utils/transaction");
-// Using require for OpenAI to avoid type issues
-const { Configuration, OpenAIApi } = require('openai');
+// Import OpenAI SDK using v4 syntax
+const openai_1 = __importDefault(require("openai"));
 const dotenv = __importStar(require("dotenv"));
 const fs = __importStar(require("fs"));
 const bs58 = __importStar(require("bs58"));
@@ -61,18 +61,18 @@ async function saveApiKeyToEnv(apiKey) {
         if (fs.existsSync(envPath)) {
             envContent = fs.readFileSync(envPath, 'utf8');
         }
-        // Check if OPENAI_KEY already exists in the file
-        const openAiKeyRegex = /^OPENAI_KEY=.*/m;
+        // Check if OPENAI_API_KEY already exists in the file
+        const openAiKeyRegex = /^OPENAI_API_KEY=.*/m;
         if (openAiKeyRegex.test(envContent)) {
-            // Replace existing OPENAI_KEY
-            envContent = envContent.replace(openAiKeyRegex, `OPENAI_KEY=${apiKey}`);
+            // Replace existing OPENAI_API_KEY
+            envContent = envContent.replace(openAiKeyRegex, `OPENAI_API_KEY=${apiKey}`);
         }
         else {
-            // Add OPENAI_KEY if it doesn't exist
+            // Add OPENAI_API_KEY if it doesn't exist
             if (envContent && !envContent.endsWith('\n')) {
                 envContent += '\n';
             }
-            envContent += `OPENAI_KEY=${apiKey}\n`;
+            envContent += `OPENAI_API_KEY=${apiKey}\n`;
         }
         // Write updated content back to .env file
         fs.writeFileSync(envPath, envContent);
@@ -148,8 +148,8 @@ async function postReplyCommand(options) {
         // If using AI, check for OpenAI key
         let openaiKey;
         if (useAi) {
-            // Check environment variable first
-            openaiKey = process.env.OPENAI_KEY;
+            // Check environment variables - try both names for backward compatibility
+            openaiKey = process.env.OPENAI_API_KEY;
             if (!openaiKey) {
                 const openaiKeyAnswer = await inquirer_1.default.prompt([
                     {
@@ -180,6 +180,9 @@ async function postReplyCommand(options) {
                         console.warn(chalk_1.default.yellow(`Could not save API key to .env file: ${error.message}`));
                     }
                 }
+            }
+            else {
+                console.log(chalk_1.default.green('Using OpenAI API key from environment variables.'));
             }
         }
         // If not using AI, get a custom comment or use randomized positive comments
@@ -720,10 +723,10 @@ function getRandomComment(predefinedComments) {
 }
 // Generate AI comment using OpenAI
 async function generateAIComment(openaiKey, tokenMint, tokenInfo = null) {
-    const configuration = new Configuration({
+    // Create OpenAI client using v4 syntax
+    const openai = new openai_1.default({
         apiKey: openaiKey,
     });
-    const openai = new OpenAIApi(configuration);
     try {
         // Build a more varied prompt that avoids hashtags, liquidity and market cap
         let promptContent = '';
@@ -755,9 +758,9 @@ async function generateAIComment(openaiKey, tokenMint, tokenInfo = null) {
         // Add a random variation to the prompt
         const randomVariation = variations[Math.floor(Math.random() * variations.length)];
         promptContent += ` ${randomVariation}`;
-        // Use the chat completions API instead of completions API for newer models
-        const response = await openai.createChatCompletion({
-            model: "gpt-3.5-turbo", // Use gpt-3.5-turbo instead of gpt-4o-mini to avoid API access issues
+        // Use the chat completions API with v4 syntax
+        const response = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
             messages: [
                 { role: "system", content: "You are a helpful assistant that creates short, enthusiastic cryptocurrency comments. Your comments should be diverse, casual, and sound like they're written by different people." },
                 { role: "user", content: promptContent }
@@ -765,8 +768,8 @@ async function generateAIComment(openaiKey, tokenMint, tokenInfo = null) {
             max_tokens: 40,
             temperature: 0.9, // Increase temperature for more randomness
         });
-        // Extract and clean up the response
-        let comment = response.data.choices[0]?.message?.content?.trim() || "Love this project! 🚀";
+        // Extract and clean up the response (v4 syntax)
+        let comment = response.choices[0]?.message?.content?.trim() || "Love this project! 🚀";
         // Remove any hashtags that might have been added
         comment = comment.replace(/#\w+/g, '');
         // If comment is too long, truncate it
@@ -804,7 +807,7 @@ async function getExistingReplies(tokenMint, proxy) {
     const maxAttempts = 4; // Limit how many attempts we make to avoid hanging
     for (const baseUrl of apiEndpoints) {
         try {
-            spinner.text = `Fetching replies from ${baseUrl}...`;
+            spinner.text = `Fetching replies from pump.fun...`;
             // Set up API client with optional proxy
             const client = createAxiosInstance(proxy);
             // Simplified to just focus on the main endpoint format
@@ -848,7 +851,7 @@ async function getExistingReplies(tokenMint, proxy) {
                     return [];
                 }
                 else {
-                    console.log(chalk_1.default.yellow(`Server returned status ${response.status} from ${repliesUrl}`));
+                    console.log(chalk_1.default.yellow(`Server returned status ${response.status} from pump.fun`));
                 }
             }
             catch (urlError) {
@@ -859,7 +862,7 @@ async function getExistingReplies(tokenMint, proxy) {
                 }
                 // More specific error messages based on error type
                 if (urlError.code === 'ECONNABORTED') {
-                    console.log(chalk_1.default.yellow(`Request to ${repliesUrl} timed out`));
+                    console.log(chalk_1.default.yellow(`Request to pump.fun timed out`));
                 }
                 else if (urlError.response && urlError.response.status === 404) {
                     // 404 error handling - new token
@@ -867,12 +870,12 @@ async function getExistingReplies(tokenMint, proxy) {
                     return [];
                 }
                 else {
-                    console.log(chalk_1.default.yellow(`Error with ${repliesUrl}: ${urlError.message}`));
+                    console.log(chalk_1.default.yellow(`Error with pump.fun: ${urlError.message}`));
                 }
             }
         }
         catch (error) {
-            console.log(chalk_1.default.yellow(`Error with endpoint ${baseUrl}: ${error.message}`));
+            console.log(chalk_1.default.yellow(`Error with pump.fun: ${error.message}`));
         }
     }
     // When we can't connect to any endpoint
@@ -885,125 +888,6 @@ async function getExistingReplies(tokenMint, proxy) {
     }
     // Return empty array to continue with posting
     return [];
-}
-/**
- * Post a reply with appropriate fields matching the reply structure
- */
-async function postStructuredReply(client, baseUrl, tokenMint, comment, wallet, authToken) {
-    try {
-        // Updated payload structure based on docs
-        const payload = {
-            text: comment,
-            mint: tokenMint,
-            user: wallet.publicKey,
-            timestamp: Date.now()
-        };
-        // Headers with optional auth token
-        const headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Origin': 'https://pump.fun',
-            'Referer': 'https://pump.fun/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
-        };
-        // Add auth token if available
-        if (authToken) {
-            // Use either Bearer token or cookie format depending on the endpoint
-            if (baseUrl.includes('client-proxy-server')) {
-                headers['Cookie'] = `auth_token=${authToken}`;
-            }
-            else {
-                headers['Authorization'] = `Bearer ${authToken}`;
-            }
-        }
-        // Try multiple endpoints based on the base URL
-        const endpoints = [
-            // Try the client-proxy-server endpoint first (most reliable)
-            baseUrl.includes('client-proxy-server') ? '/comment' : '/replies',
-            // Then try API V3 endpoint
-            '/replies'
-        ];
-        for (const endpoint of endpoints) {
-            try {
-                console.log(chalk_1.default.gray(`Attempting to post to ${baseUrl}${endpoint}...`));
-                // Try to post the reply
-                const response = await client.post(`${baseUrl}${endpoint}`, payload, {
-                    headers,
-                    timeout: 15000
-                });
-                // Check if successful
-                if (response.status >= 200 && response.status < 300) {
-                    console.log(chalk_1.default.green(`Reply posted successfully with ID: ${response.data?.id || 'unknown'}`));
-                    return true;
-                }
-            }
-            catch (endpointError) {
-                console.log(chalk_1.default.yellow(`Error posting to ${baseUrl}${endpoint}: ${endpointError.message}`));
-                // Continue to next endpoint
-            }
-        }
-        return false;
-    }
-    catch (error) {
-        console.log(chalk_1.default.yellow(`Error posting structured reply: ${error.message}`));
-        return false;
-    }
-}
-/**
- * Last resort attempt to post a comment directly without authentication
- * This might work for some API versions that don't enforce auth
- */
-async function tryDirectPostWithoutAuth(client, baseUrl, tokenMint, comment, wallet, spinner) {
-    // Try client-proxy-server endpoint if baseUrl is not already that
-    const clientProxyUrl = "https://client-proxy-server.pump.fun";
-    const endpoints = [
-        { url: baseUrl, path: baseUrl.includes('client-proxy-server') ? '/comment' : '/replies' },
-        { url: clientProxyUrl, path: '/comment' } // Always try the client-proxy-server as fallback
-    ];
-    for (const endpoint of endpoints) {
-        try {
-            spinner.text = `Attempting to post without auth to ${endpoint.url}${endpoint.path}...`;
-            // Create minimal payload
-            const payload = {
-                text: comment,
-                mint: tokenMint,
-                user: wallet.publicKey,
-                timestamp: Date.now()
-            };
-            // Use browser-like headers
-            const headers = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Origin': 'https://pump.fun',
-                'Referer': 'https://pump.fun/',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
-            };
-            // Make the request
-            const response = await client.post(`${endpoint.url}${endpoint.path}`, payload, {
-                headers,
-                timeout: 15000
-            });
-            // Check if successful
-            if (response.status >= 200 && response.status < 300) {
-                spinner.succeed(`Successfully posted comment without auth!`);
-                return true;
-            }
-        }
-        catch (error) {
-            const errorMessage = error.message || 'Unknown error';
-            // Check for CAPTCHA
-            if (errorMessage.toLowerCase().includes('captcha') ||
-                (error.response && error.response.status === 403)) {
-                spinner.warn(`CAPTCHA detected on ${endpoint.url}${endpoint.path}. Try using proxies.`);
-            }
-            else {
-                spinner.warn(`Failed to post without auth to ${endpoint.url}${endpoint.path}: ${errorMessage}`);
-            }
-            // Continue to next endpoint
-        }
-    }
-    spinner.warn('Failed to post without authentication to any endpoint');
-    return false;
 }
 /**
  * Post a comment using direct API endpoints from pump.fun

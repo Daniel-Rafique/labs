@@ -22,7 +22,11 @@
     "build-release": "node build-release.js",
     "clean": "rm -rf dist node_modules package-lock.json",
     "postinstall": "tsc --skipLibCheck --noEmitOnError false -p tsconfig.json && npx patch-package",
-    "check-license": "node scripts/license-check.js # Usage: npm run check-license -- --key YOUR-LICENSE-KEY --save"
+    "check-license": "node scripts/license-check.js # Usage: npm run check-license -- --key YOUR-LICENSE-KEY --save",
+    "trade-bot": "ts-node --no-warnings src/bot.ts",
+    "trade-bot:build": "tsc --skipLibCheck --noEmitOnError false && node --no-warnings -r module-alias/register dist/bot.js",
+    "start-bot": "node --no-warnings -r module-alias/register dist/index.js start-bot",
+    "setup-proxy": "node --no-warnings -r module-alias/register dist/index.js setup-proxy"
   },
   "dependencies": {
     "@solana/buffer-layout": "4.0.1",

@@ -37,8 +37,8 @@ const wallet_1 = require("../utils/wallet");
 const transaction_1 = require("../utils/transaction");
 const PumpFunWrapper_1 = require("../utils/PumpFunWrapper");
 const imageUpload_1 = require("../utils/imageUpload");
-// Use require for OpenAI to avoid type issues
-const { Configuration, OpenAIApi } = require('openai');
+// Import OpenAI SDK using v4 syntax
+const openai_1 = __importDefault(require("openai"));
 const dotenv = __importStar(require("dotenv"));
 // Load environment variables
 dotenv.config();
@@ -56,18 +56,18 @@ async function saveApiKeyToEnv(apiKey) {
         if (fs.existsSync(envPath)) {
             envContent = fs.readFileSync(envPath, 'utf8');
         }
-        // Check if OPENAI_KEY already exists in the file
-        const openAiKeyRegex = /^OPENAI_KEY=.*/m;
+        // Check if OPENAI_API_KEY already exists in the file
+        const openAiKeyRegex = /^OPENAI_API_KEY=.*/m;
         if (openAiKeyRegex.test(envContent)) {
-            // Replace existing OPENAI_KEY
-            envContent = envContent.replace(openAiKeyRegex, `OPENAI_KEY=${apiKey}`);
+            // Replace existing OPENAI_API_KEY
+            envContent = envContent.replace(openAiKeyRegex, `OPENAI_API_KEY=${apiKey}`);
         }
         else {
-            // Add OPENAI_KEY if it doesn't exist
+            // Add OPENAI_API_KEY if it doesn't exist
             if (envContent && !envContent.endsWith('\n')) {
                 envContent += '\n';
             }
-            envContent += `OPENAI_KEY=${apiKey}\n`;
+            envContent += `OPENAI_API_KEY=${apiKey}\n`;
         }
         // Write updated content back to .env file
         fs.writeFileSync(envPath, envContent);
@@ -87,13 +87,13 @@ async function generateAIUsername(openaiKey) {
         if (!openaiKey) {
             throw new Error("No OpenAI API key provided");
         }
-        const configuration = new Configuration({
+        // Create OpenAI client using v4 syntax
+        const openai = new openai_1.default({
             apiKey: openaiKey,
         });
-        const openai = new OpenAIApi(configuration);
         // Create a more targeted prompt for usernames
         const prompt = "Generate a unique, cool-sounding cryptocurrency or NFT username that is between 4-15 characters. Make it sound like a crypto enthusiast or trader. Should be a single word with no spaces. Use a mix of letters and sometimes numbers. Avoid special characters. Just return the username without any explanation or quotes.";
-        const response = await openai.createChatCompletion({
+        const response = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
                 { role: "system", content: "You are a helpful assistant that creates short, unique usernames. Just respond with the username, nothing else." },
@@ -103,7 +103,7 @@ async function generateAIUsername(openaiKey) {
             temperature: 0.9,
         });
         // Extract and clean up the response
-        let username = response.data.choices[0]?.message?.content?.trim() || "crypto_user";
+        let username = response.choices[0]?.message?.content?.trim() || "crypto_user";
         // Remove any non-alphanumeric characters and spaces
         username = username.replace(/[^a-zA-Z0-9]/g, '');
         // Ensure it's not too long
@@ -132,13 +132,13 @@ async function generateAIBio(openaiKey) {
         if (!openaiKey) {
             throw new Error("No OpenAI API key provided");
         }
-        const configuration = new Configuration({
+        // Create OpenAI client using v4 syntax
+        const openai = new openai_1.default({
             apiKey: openaiKey,
         });
-        const openai = new OpenAIApi(configuration);
         // Create a prompt for generating a bio
         const prompt = "Generate a short, engaging crypto trader bio for a pump.fun profile. Maximum 100 characters. Make it sound natural, realistic, and reflect crypto enthusiasm. No hashtags or links. Just return the bio without quotes.";
-        const response = await openai.createChatCompletion({
+        const response = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
                 { role: "system", content: "You are a helpful assistant that creates short, natural-sounding crypto profile bios. Just respond with the bio, nothing else." },
@@ -148,7 +148,7 @@ async function generateAIBio(openaiKey) {
             temperature: 0.8,
         });
         // Extract and clean up the response
-        let bio = response.data.choices[0]?.message?.content?.trim() || "Crypto enthusiast. Diamond hands. Always looking for the next gem.";
+        let bio = response.choices[0]?.message?.content?.trim() || "Crypto enthusiast. Diamond hands. Always looking for the next gem.";
         // Ensure it's not too long (pump.fun has a character limit)
         if (bio.length > 160) {
             bio = bio.substring(0, 157) + "...";
@@ -197,17 +197,17 @@ async function createProfilesCommand(options) {
         // If using AI, check for OpenAI key
         let openaiKey;
         if (useAi) {
-            // Check environment variable first
-            openaiKey = process.env.OPENAI_KEY;
+            // Check environment variables - try both names for backward compatibility
+            openaiKey = process.env.OPENAI_API_KEY;
             if (!openaiKey) {
                 const openaiKeyAnswer = await inquirer_1.default.prompt([
                     {
                         type: 'input',
                         name: 'openaiKey',
-                        message: 'Enter your OpenAI API key (starts with "sk-"):',
+                        message: 'Enter your OpenAI API key:',
                         validate: (input) => {
-                            if (!input || !input.startsWith('sk-'))
-                                return 'Please enter a valid OpenAI API key starting with "sk-"';
+                            if (!input)
+                                return 'OpenAI API key is required for AI-generated profiles';
                             return true;
                         }
                     },
@@ -220,13 +220,10 @@ async function createProfilesCommand(options) {
                 ]);
                 openaiKey = openaiKeyAnswer.openaiKey;
                 // Save the API key to .env file if requested
-                if (openaiKeyAnswer.saveKey) {
+                if (openaiKeyAnswer.saveKey && openaiKey) {
                     try {
-                        // Ensure openaiKey is a string before passing to saveApiKeyToEnv
-                        if (openaiKey) {
-                            await saveApiKeyToEnv(openaiKey);
-                            console.log(chalk_1.default.green('✓ OpenAI API key saved to .env file'));
-                        }
+                        await saveApiKeyToEnv(openaiKey);
+                        console.log(chalk_1.default.green('✓ OpenAI API key saved to .env file'));
                     }
                     catch (error) {
                         console.warn(chalk_1.default.yellow(`Could not save API key to .env file: ${error.message}`));
@@ -468,7 +465,7 @@ async function createProfiles(wallets, options) {
                         'https://client-proxy-server.pump.fun/users'
                     ];
                     const endpointToUse = endpoints[attempt % endpoints.length];
-                    spinner.text = `Creating profile via ${endpointToUse}...`;
+                    spinner.text = `Creating profile...`;
                     // Use the direct API endpoint to create profile
                     const response = await client.post(endpointToUse, profileData);
                     if (response.status >= 200 && response.status < 300) {
@@ -636,14 +633,14 @@ async function checkApiConnectivity() {
         for (const endpoint of pingEndpoints) {
             try {
                 await client.get(endpoint);
-                console.log(chalk_1.default.green(`✓ Successfully connected to ${endpoint}`));
+                console.log(chalk_1.default.green(`✓ Successfully connected to pump.fun`));
                 return true;
             }
             catch (error) {
-                console.log(chalk_1.default.yellow(`Failed to connect to ${endpoint}`));
+                console.log(chalk_1.default.yellow(`Failed to connect to pump.fun`));
             }
         }
-        console.log(chalk_1.default.red('Failed to connect to any pump.fun endpoint. Profile creation may fail.'));
+        console.log(chalk_1.default.red('Failed to connect to any pump.fun. Profile creation may fail.'));
         // Ask user if they want to continue
         const { shouldContinue } = await inquirer_1.default.prompt([
             {

@@ -42,6 +42,55 @@ export async function createTokenCommand(options: CreateTokenCommandOptions): Pr
       return;
     }
     
+    // Check for proxy configuration
+    const proxyManager = getProxyManager();
+    const proxyEnabled = proxyManager.isEnabled();
+    
+    // If proxy support wasn't specified in options, ask user if proxy is available
+    if (options.useProxy === undefined && proxyEnabled) {
+      const proxyAnswer = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'useProxy',
+          message: 'Do you want to use residential proxies for token creation?',
+          default: true
+        }
+      ]);
+      
+      options.useProxy = proxyAnswer.useProxy;
+      
+      if (options.useProxy) {
+        console.log(chalk.green('Proxy support is enabled for token creation'));
+        
+        // Test proxy connection
+        const testResult = await proxyManager.testProxy();
+        if (testResult.success) {
+          console.log(chalk.green(`✓ Proxy test successful: ${testResult.ip}`));
+        } else {
+          console.log(chalk.yellow(`⚠️ Proxy test failed: ${testResult.message}`));
+          
+          // Ask if they want to continue without proxy
+          const continueAnswer = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'continueWithoutProxy',
+              message: 'Proxy test failed. Do you want to continue without proxy?',
+              default: true
+            }
+          ]);
+          
+          if (continueAnswer.continueWithoutProxy) {
+            options.useProxy = false;
+          } else {
+            return; // Exit if they don't want to continue
+          }
+        }
+      }
+    } else if (options.useProxy === true && !proxyEnabled) {
+      console.log(chalk.yellow('Proxy support was requested but no proxies are configured. Continuing without proxy.'));
+      options.useProxy = false;
+    }
+    
     // Gather required information
     const questions: Array<any> = [];
     
@@ -162,7 +211,8 @@ export async function createTokenCommand(options: CreateTokenCommandOptions): Pr
       telegram: options.telegram || answers.telegram,
       website: options.website || answers.website,
       initialBuys: parseInt(options.buys || answers.buys),
-      creatorWalletIndex: answers.creatorWalletIndex
+      creatorWalletIndex: answers.creatorWalletIndex,
+      useProxy: options.useProxy
     };
     
     // Confirm with the user
@@ -176,6 +226,7 @@ export async function createTokenCommand(options: CreateTokenCommandOptions): Pr
     console.log(chalk.white(`Website: ${createTokenOptions.website || 'None'}`));
     console.log(chalk.white(`Initial Buys: ${createTokenOptions.initialBuys}`));
     console.log(chalk.white(`Creator Wallet: ${wallets[createTokenOptions.creatorWalletIndex].publicKey}`));
+    console.log(chalk.white(`Use Proxies: ${createTokenOptions.useProxy ? 'Yes' : 'No'}`));
     
     const { confirmCreate } = await inquirer.prompt([
       {

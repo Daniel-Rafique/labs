@@ -35,7 +35,13 @@ export function validateRequiredConfig(): ConfigValidationResult {
   
   // Check for OpenAI API key
   if (!process.env.OPENAI_API_KEY) {
-    missingItems.push('OPENAI_API_KEY');
+    // Check for backward compatibility with OPENAI_KEY (which was used in some parts of the app)
+    if (process.env.OPENAI_KEY) {
+      // Don't report as missing if we have the alternative name
+      process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    } else {
+      missingItems.push('OPENAI_API_KEY');
+    }
   }
   
   // Check for license key (either in environment variable or file)

@@ -1,12 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, Connection } from '@solana/web3.js';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 import { exec } from 'child_process';
 import { resolveWalletPath } from '../utils/wallet';
+import OpenAI from 'openai';
+import axios from 'axios';
+import { getProxyManager } from '../utils/proxyManager';
 
 interface StartBotOptions {
   contract?: string;
@@ -17,6 +20,29 @@ interface StartBotOptions {
   numBuys?: string;
   directory?: string;
   numCycles?: string;
+  useAi?: boolean;
+  useProxies?: boolean;
+}
+
+interface TokenInfo {
+  name?: string;
+  symbol?: string;
+  price?: number;
+  volume24h?: number;
+  marketCap?: number;
+  liquidity?: number;
+  age?: number; // in days
+  holders?: number;
+  volatility?: number;
+}
+
+interface AIRecommendedParams {
+  maxAmount: string;
+  minAmount: string;
+  timeBetween: string;
+  numBuys: string;
+  numCycles: string;
+  reasoning: string;
 }
 
 export async function startBotCommand(options: StartBotOptions): Promise<void> {
@@ -30,7 +56,9 @@ export async function startBotCommand(options: StartBotOptions): Promise<void> {
       jito, 
       numBuys,
       directory,
-      numCycles
+      numCycles,
+      useAi,
+      useProxies
     } = await processBotOptions(options);
     
     // Get project root directory
@@ -51,7 +79,9 @@ export async function startBotCommand(options: StartBotOptions): Promise<void> {
       NUMBER_OF_CYCLES: numCycles,
       JITO: jito ? 'true' : 'false',
       ENABLE_TRADING: 'true',
-      TRADE_TYPE: 'sol_spl'
+      TRADE_TYPE: 'sol_spl',
+      USE_AI_OPTIMIZATION: useAi ? 'true' : 'false',
+      USE_PROXIES: useProxies ? 'true' : 'false'
     };
     
     // Create .env file at the project root
@@ -68,6 +98,8 @@ export async function startBotCommand(options: StartBotOptions): Promise<void> {
     console.log(chalk.green(`Number of Cycles: ${numCycles}`));
     console.log(chalk.green(`Mode: ${jito ? 'JITO' : 'Lightning/Bump'}`));
     console.log(chalk.green(`Wallet File: ${walletPath}`));
+    console.log(chalk.green(`AI Optimization: ${useAi ? 'Enabled' : 'Disabled'}`));
+    console.log(chalk.green(`Proxy Support: ${useProxies ? 'Enabled' : 'Disabled'}`));
     console.log(chalk.cyan('==========================\n'));
     
     const confirm = await inquirer.prompt([
@@ -135,6 +167,136 @@ export async function startBotCommand(options: StartBotOptions): Promise<void> {
   }
 }
 
+/**
+ * Fetches token information from DexScreener or other sources
+ * @param tokenAddress The token's contract address
+ * @returns TokenInfo object with available data
+ */
+async function fetchTokenInfo(tokenAddress: string): Promise<TokenInfo> {
+  const tokenInfo: TokenInfo = {};
+  const spinner = ora('Fetching token information...').start();
+  
+  try {
+    // Try DexScreener API first
+    const dexScreenerUrl = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
+    const response = await axios.get(dexScreenerUrl, { timeout: 10000 });
+    
+    if (response.data && response.data.pairs && response.data.pairs.length > 0) {
+      const pair = response.data.pairs[0];
+      
+      tokenInfo.symbol = pair.baseToken.symbol;
+      tokenInfo.name = pair.baseToken.name;
+      tokenInfo.price = parseFloat(pair.priceUsd);
+      tokenInfo.liquidity = parseFloat(pair.liquidity.usd);
+      tokenInfo.volume24h = parseFloat(pair.volume.h24);
+      
+      // Calculate approximate age based on pair creation time
+      if (pair.createAt) {
+        const creationTime = new Date(pair.createAt).getTime();
+        const now = Date.now();
+        tokenInfo.age = Math.floor((now - creationTime) / (1000 * 60 * 60 * 24));
+      }
+      
+      spinner.succeed(`Token information fetched successfully: ${tokenInfo.name} (${tokenInfo.symbol})`);
+    } else {
+      spinner.warn('No trading pairs found for this token on DexScreener');
+    }
+  } catch (error: any) {
+    spinner.warn(`Error fetching token data: ${error.message}`);
+  }
+  
+  return tokenInfo;
+}
+
+/**
+ * Use AI to recommend optimal trading parameters based on token information
+ * @param tokenAddress The token's contract address
+ * @param tokenInfo Information about the token
+ * @param jito Whether JITO mode is enabled
+ * @returns Recommended trading parameters
+ */
+async function getAIRecommendedParams(
+  tokenAddress: string, 
+  tokenInfo: TokenInfo,
+  jito: boolean
+): Promise<AIRecommendedParams | null> {
+  const spinner = ora('Using AI to optimize trading parameters...').start();
+  
+  try {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    
+    if (!openaiKey) {
+      spinner.fail('OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.');
+      return null;
+    }
+    
+    const openai = new OpenAI({
+      apiKey: openaiKey
+    });
+    
+    const tokenDescription = tokenInfo.name 
+      ? `${tokenInfo.name} (${tokenInfo.symbol})`
+      : `Token at address ${tokenAddress}`;
+      
+    let promptContent = `You are an expert crypto trading bot optimizer. I need optimal parameters for a Solana token trading bot.
+
+Token: ${tokenDescription}
+${tokenInfo.price ? `Current Price: $${tokenInfo.price}` : ''}
+${tokenInfo.liquidity ? `Liquidity: $${tokenInfo.liquidity}` : ''}
+${tokenInfo.volume24h ? `24h Volume: $${tokenInfo.volume24h}` : ''}
+${tokenInfo.age ? `Token Age: ${tokenInfo.age} days` : ''}
+Trading Mode: ${jito ? 'JITO (MEV protection)' : 'Lightning/Bump (fastest execution)'}
+
+Based on these token characteristics, suggest optimal values for:
+1. Max Trade Amount (in SOL)
+2. Min Trade Amount (in SOL)
+3. Time Between Buys (in milliseconds)
+4. Number of Buys before selling
+5. Number of Cycles to perform
+
+For each parameter, provide a specific value (not a range) that is optimal for this token. Explain your reasoning for these recommendations.
+
+Format your response as a JSON object with these fields:
+{
+  "maxAmount": "value",
+  "minAmount": "value",
+  "timeBetween": "value",
+  "numBuys": "value",
+  "numCycles": "value",
+  "reasoning": "brief explanation"
+}`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are an expert crypto trading bot optimizer that provides precise parameter recommendations based on token data." },
+        { role: "user", content: promptContent }
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" }
+    });
+    
+    const content = response.choices[0].message.content;
+    
+    if (!content) {
+      spinner.fail('Failed to get AI recommendations: Empty response');
+      return null;
+    }
+    
+    try {
+      const recommendations = JSON.parse(content) as AIRecommendedParams;
+      spinner.succeed('AI trading parameter optimization complete');
+      return recommendations;
+    } catch (parseError) {
+      spinner.fail(`Failed to parse AI recommendations: ${parseError}`);
+      return null;
+    }
+  } catch (error: any) {
+    spinner.fail(`AI optimization error: ${error.message}`);
+    return null;
+  }
+}
+
 // Process and validate bot options
 async function processBotOptions(options: StartBotOptions): Promise<{ 
   contract: string; 
@@ -145,6 +307,8 @@ async function processBotOptions(options: StartBotOptions): Promise<{
   numBuys: string;
   directory: string;
   numCycles: string;
+  useAi: boolean;
+  useProxies: boolean;
 }> {
   let { 
     contract, 
@@ -154,7 +318,9 @@ async function processBotOptions(options: StartBotOptions): Promise<{
     jito = false, 
     numBuys = '3',
     directory = 'user',
-    numCycles = '1'
+    numCycles = '1',
+    useAi = false,
+    useProxies = false
   } = options;
   
   // Handle contract address
@@ -188,6 +354,176 @@ async function processBotOptions(options: StartBotOptions): Promise<{
   ]);
   
   jito = modeAnswer.jito;
+  
+  // Ask if user wants to use AI for parameter optimization
+  const aiOptimizationAnswer = await inquirer.prompt<{useAi: boolean}>([
+    {
+      type: 'confirm',
+      name: 'useAi',
+      message: 'Use AI to optimize trading parameters?',
+      default: useAi
+    }
+  ]);
+  
+  useAi = aiOptimizationAnswer.useAi;
+  
+  // Check for proxy configuration and ask if user wants to use proxies
+  const proxyManager = getProxyManager();
+  const proxiesConfigured = proxyManager.isEnabled();
+  
+  if (proxiesConfigured) {
+    const proxyAnswer = await inquirer.prompt<{useProxies: boolean}>([
+      {
+        type: 'confirm',
+        name: 'useProxies',
+        message: 'Use residential proxies for trades (recommended)?',
+        default: true
+      }
+    ]);
+    
+    useProxies = proxyAnswer.useProxies;
+    
+    // If user wants to use proxies but they're not configured, ask if they want to set them up
+    if (useProxies && !proxiesConfigured) {
+      console.log(chalk.yellow('Proxies not yet configured.'));
+      const setupAnswer = await inquirer.prompt<{setupNow: boolean}>([
+        {
+          type: 'confirm',
+          name: 'setupNow',
+          message: 'Would you like to set up proxies now?',
+          default: true
+        }
+      ]);
+      
+      if (setupAnswer.setupNow) {
+        // Import and run the proxy setup command
+        const { setupProxyCommand } = require('./setupProxy');
+        await setupProxyCommand({ service: 'oxylabs' });
+        
+        // Check again if proxies are configured
+        if (proxyManager.isEnabled()) {
+          useProxies = true;
+        } else {
+          useProxies = false;
+          console.log(chalk.yellow('Continuing without proxies.'));
+        }
+      } else {
+        useProxies = false;
+        console.log(chalk.yellow('Continuing without proxies.'));
+      }
+    }
+  }
+  
+  // If AI optimization is selected, fetch token info and get recommendations
+  if (useAi) {
+    // Check for OpenAI API key
+    if (!process.env.OPENAI_API_KEY) {
+      console.log(chalk.yellow('OpenAI API key not found in environment variables.'));
+      const { openaiKey, saveKey } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'openaiKey',
+          message: 'Enter your OpenAI API key:',
+          validate: (input: string) => {
+            if (!input) return 'OpenAI API key is required for AI optimization';
+            return true;
+          }
+        },
+        {
+          type: 'confirm',
+          name: 'saveKey',
+          message: 'Save this API key for future use?',
+          default: true
+        }
+      ]);
+      
+      // Save API key if requested
+      if (saveKey) {
+        process.env.OPENAI_API_KEY = openaiKey;
+        // Get project root directory
+        const projectRootDir = path.resolve(__dirname, '../../');
+        const envPath = path.join(projectRootDir, '.env');
+        
+        let envContent = '';
+        
+        // Read existing .env file if it exists
+        if (fs.existsSync(envPath)) {
+          envContent = fs.readFileSync(envPath, 'utf8');
+        }
+        
+        // Check if OPENAI_API_KEY already exists in the file
+        const openAiKeyRegex = /^OPENAI_API_KEY=.*/m;
+        
+        if (openAiKeyRegex.test(envContent)) {
+          // Replace existing OPENAI_API_KEY
+          envContent = envContent.replace(openAiKeyRegex, `OPENAI_API_KEY=${openaiKey}`);
+        } else {
+          // Add OPENAI_API_KEY if it doesn't exist
+          envContent += `\nOPENAI_API_KEY=${openaiKey}\n`;
+        }
+        
+        // Write updated content back to file
+        fs.writeFileSync(envPath, envContent);
+        console.log(chalk.green('✓ OpenAI API key saved to .env file'));
+      } else {
+        process.env.OPENAI_API_KEY = openaiKey;
+      }
+    }
+    
+    // Fetch token information
+    const tokenInfo = await fetchTokenInfo(contract);
+    
+    // Get AI parameter recommendations
+    const aiParams = await getAIRecommendedParams(contract, tokenInfo, jito);
+    
+    if (aiParams) {
+      // Show AI recommendations
+      console.log(chalk.cyan('\n====== AI RECOMMENDED PARAMETERS ======'));
+      console.log(chalk.green(`Max Trade Amount: ${aiParams.maxAmount} SOL`));
+      console.log(chalk.green(`Min Trade Amount: ${aiParams.minAmount} SOL`));
+      console.log(chalk.green(`Time Between Buys: ${aiParams.timeBetween}ms`));
+      console.log(chalk.green(`Number of Buys: ${aiParams.numBuys}`));
+      console.log(chalk.green(`Number of Cycles: ${aiParams.numCycles}`));
+      console.log(chalk.cyan('======================================'));
+      console.log(chalk.blue('AI Reasoning:'));
+      console.log(chalk.blue(aiParams.reasoning));
+      console.log(chalk.cyan('======================================\n'));
+      
+      // Ask if user wants to use AI recommendations
+      const { useRecommendations } = await inquirer.prompt<{useRecommendations: boolean}>([
+        {
+          type: 'confirm',
+          name: 'useRecommendations',
+          message: 'Use these AI-recommended parameters?',
+          default: true
+        }
+      ]);
+      
+      if (useRecommendations) {
+        maxAmount = aiParams.maxAmount;
+        minAmount = aiParams.minAmount;
+        timeBetween = aiParams.timeBetween;
+        numBuys = aiParams.numBuys;
+        numCycles = aiParams.numCycles;
+        
+        // Skip manual parameter input
+        return { 
+          contract,
+          maxAmount, 
+          minAmount,
+          timeBetween, 
+          jito, 
+          numBuys,
+          directory,
+          numCycles,
+          useAi,
+          useProxies
+        };
+      }
+    } else {
+      console.log(chalk.yellow('Failed to get AI recommendations. Continuing with manual parameter input.'));
+    }
+  }
   
   // Handle trade settings
   const tradeSettingsAnswers = await inquirer.prompt([
@@ -278,7 +614,9 @@ async function processBotOptions(options: StartBotOptions): Promise<{
     jito, 
     numBuys,
     directory,
-    numCycles
+    numCycles,
+    useAi,
+    useProxies
   };
 }
 
