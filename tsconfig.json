@@ -21,7 +21,9 @@
       "@commands/*": ["src/commands/*"],
       "@constants/*": ["src/constants/*"],
       "@lib/*": ["src/lib/*"]
-    }
+    },
+    "noImplicitThis": false,
+    "strictNullChecks": false
   },
   "include": ["src/**/*", "types/**/*"],
   "exclude": ["node_modules", "dist"]

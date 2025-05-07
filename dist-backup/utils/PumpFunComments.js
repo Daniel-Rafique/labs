@@ -1,0 +1,447 @@
+"use strict";
+/**
+ * PumpFunComments.ts
+ *
+ * Enhanced implementation for posting comments to Pump.fun tokens
+ * using structured authentication and proxy management
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.checkCommentsEnabled = exports.postComment = void 0;
+const chalk_1 = __importDefault(require("chalk"));
+const PumpFunAuth_1 = require("./PumpFunAuth");
+const transaction_1 = require("./transaction");
+// Define constant endpoints that actually work (based on reference code)
+const CLIENT_PROXY_URL = "https://client-proxy-server.pump.fun";
+const COMMENT_ENDPOINT = "/comment"; // Note the different endpoint path
+const API_V3_URL = "https://frontend-api-v3.pump.fun";
+const REPLIES_ENDPOINT = "/replies";
+const CAPTCHA_SCORE_ENDPOINT = "/captcha-score";
+/**
+ * Post a comment to a Pump.fun token
+ * @param wallet The wallet data to use for authentication
+ * @param tokenMint The mint address of the token to comment on
+ * @param comment The comment text to post
+ * @param authResult Authentication result with authToken and awsToken
+ * @param proxy Optional proxy to use
+ * @param options Additional options for posting
+ * @returns Result of the comment posting operation
+ */
+async function postComment(wallet, tokenMint, comment, authResult, proxy, options = {}) {
+    console.log(chalk_1.default.cyan(`Posting comment via pump.fun API...`));
+    // Default options
+    const { maxRetries = 3, timeoutSeconds = 30, simulateBrowsing = true, randomizeDelay = true, imageUrl = undefined } = options;
+    // Validate token mint
+    if (!tokenMint || tokenMint.trim() === '' || tokenMint === 'address_here') {
+        console.log(chalk_1.default.red('Invalid token mint address provided'));
+        return { success: false, error: 'Invalid token mint address' };
+    }
+    // If image URL is provided, log it
+    if (imageUrl) {
+        console.log(chalk_1.default.blue(`Including image with comment: ${imageUrl}`));
+    }
+    // Create Axios client with proxy if provided
+    const client = (0, PumpFunAuth_1.createAxiosInstance)(proxy);
+    // Flag to detect CAPTCHA challenges
+    let captchaDetected = false;
+    try {
+        // Use provided auth tokens if available, otherwise authenticate
+        let authToken = null;
+        let awsToken = null;
+        if (authResult && authResult.authToken) {
+            console.log(chalk_1.default.gray(`Using provided authentication credentials`));
+            authToken = authResult.authToken;
+            awsToken = authResult.awsToken;
+        }
+        else {
+            // First authenticate with the service
+            console.log(chalk_1.default.gray(`No auth credentials provided, authenticating with Pump.fun...`));
+            const authResponse = await (0, PumpFunAuth_1.authenticateWithPumpFun)(wallet, proxy);
+            // Handle various return types from authenticateWithPumpFun
+            if (authResponse === null) {
+                console.log(chalk_1.default.red('Failed to authenticate with Pump.fun'));
+                return {
+                    success: false,
+                    error: 'Authentication failed',
+                    captchaDetected: captchaDetected
+                };
+            }
+            else if (typeof authResponse === 'string') {
+                // If it's a string, it's the authToken
+                authToken = authResponse;
+            }
+            else {
+                // Otherwise it's the full auth result object
+                authToken = authResponse.authToken;
+                awsToken = authResponse.awsToken;
+            }
+            console.log(chalk_1.default.green('Successfully authenticated with Pump.fun'));
+        }
+        // If requested, simulate browsing to the token page before posting
+        if (simulateBrowsing) {
+            try {
+                await simulateTokenBrowsing(client, tokenMint);
+            }
+            catch (browsingError) {
+                console.log(chalk_1.default.yellow(`Could not simulate browsing: ${browsingError instanceof Error ? browsingError.message : String(browsingError)}`));
+                console.log(chalk_1.default.yellow('Continuing with comment posting anyway...'));
+            }
+        }
+        // Add human-like delay before posting if enabled
+        if (randomizeDelay) {
+            const delay = Math.floor(Math.random() * 2000) + 1000;
+            console.log(chalk_1.default.gray(`Waiting ${delay}ms before posting comment...`));
+            await (0, transaction_1.sleep)(delay);
+        }
+        // First try the API V3 endpoint directly as it's been shown to work
+        try {
+            console.log(chalk_1.default.cyan(`Attempting to post comment via API V3 ${REPLIES_ENDPOINT} endpoint...`));
+            // Create the payload based on whether an image URL is included
+            const commentPayload = {
+                text: comment,
+                mint: tokenMint,
+                ...(imageUrl ? { image: imageUrl } : {}) // Add image field if URL is provided
+            };
+            const headers = {
+                "Content-Type": "application/json",
+                "Accept": "*/*",
+                "Origin": "https://pump.fun",
+                "Referer": "https://pump.fun/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+            };
+            if (authToken) {
+                headers["Authorization"] = `Bearer ${authToken}`;
+            }
+            if (awsToken) {
+                headers["X-Aws-Proxy-Token"] = awsToken;
+            }
+            const response = await client.post(`${API_V3_URL}${REPLIES_ENDPOINT}`, commentPayload, {
+                headers,
+                timeout: timeoutSeconds * 1000
+            });
+            if (response.status >= 200 && response.status < 300) {
+                console.log(chalk_1.default.green(`Successfully posted comment via API V3!`));
+                return {
+                    success: true,
+                    token: authToken || undefined,
+                    commentId: response.data?.id || "unknown"
+                };
+            }
+        }
+        catch (apiError) {
+            console.log(chalk_1.default.yellow(`API V3 posting failed: ${apiError.message}`));
+            // Continue to try fallback methods
+        }
+        // If the API V3 endpoint fails, try with other endpoints
+        // Endpoints to try as fallbacks
+        const fallbackEndpoints = [
+            { url: "https://pump-fe.helius-rpc.com", path: REPLIES_ENDPOINT },
+            { url: "https://frontend-api-v2.pump.fun", path: REPLIES_ENDPOINT },
+            { url: "https://api-v3.pump.fun", path: REPLIES_ENDPOINT }
+        ];
+        for (const endpoint of fallbackEndpoints) {
+            try {
+                console.log(chalk_1.default.cyan(`Attempting to post comment via ${endpoint.url}${endpoint.path}...`));
+                // Create the payload based on whether an image URL is included
+                const commentPayload = {
+                    text: comment,
+                    mint: tokenMint,
+                    ...(imageUrl ? { image: imageUrl } : {}) // Add image field if URL is provided
+                };
+                const headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "*/*",
+                    "Origin": "https://pump.fun",
+                    "Referer": "https://pump.fun/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                };
+                if (authToken) {
+                    headers["Authorization"] = `Bearer ${authToken}`;
+                }
+                if (awsToken) {
+                    headers["X-Aws-Proxy-Token"] = awsToken;
+                }
+                const response = await client.post(`${endpoint.url}${endpoint.path}`, commentPayload, {
+                    headers,
+                    timeout: timeoutSeconds * 1000
+                });
+                if (response.status >= 200 && response.status < 300) {
+                    console.log(chalk_1.default.green(`Successfully posted comment via ${endpoint.url}!`));
+                    return {
+                        success: true,
+                        token: authToken || undefined,
+                        commentId: response.data?.id || "unknown"
+                    };
+                }
+            }
+            catch (endpointError) {
+                console.log(chalk_1.default.yellow(`Posting to ${endpoint.url} failed: ${endpointError.message}`));
+                // Continue to the next endpoint
+            }
+        }
+        // As a last resort, try the client-proxy-server which often has CAPTCHA issues
+        if (maxRetries > 0) {
+            console.log(chalk_1.default.yellow(`All direct API endpoints failed. Trying client-proxy-server as last resort...`));
+            try {
+                console.log(chalk_1.default.cyan(`Attempting to post comment via ${CLIENT_PROXY_URL}${COMMENT_ENDPOINT}...`));
+                // Create the payload based on whether an image URL is included
+                const commentPayload = {
+                    text: comment,
+                    mint: tokenMint,
+                    ...(imageUrl ? { image: imageUrl } : {}) // Add image field if URL is provided
+                };
+                const headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "*/*",
+                    "Origin": "https://pump.fun",
+                    "Referer": "https://pump.fun/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                };
+                if (authToken) {
+                    headers["Cookie"] = `auth_token=${authToken}`;
+                }
+                if (awsToken) {
+                    headers["X-Aws-Proxy-Token"] = awsToken;
+                }
+                const response = await client.post(`${CLIENT_PROXY_URL}${COMMENT_ENDPOINT}`, commentPayload, {
+                    headers,
+                    timeout: timeoutSeconds * 1000
+                });
+                if (response.status >= 200 && response.status < 300) {
+                    console.log(chalk_1.default.green(`Successfully posted comment via client proxy server!`));
+                    return {
+                        success: true,
+                        token: authToken || undefined,
+                        commentId: response.data?.id || "unknown"
+                    };
+                }
+            }
+            catch (proxyError) {
+                // Check for CAPTCHA challenges in error response
+                if (proxyError.response && proxyError.response.data) {
+                    const errorMsg = typeof proxyError.response.data === 'string'
+                        ? proxyError.response.data
+                        : JSON.stringify(proxyError.response.data);
+                    if (errorMsg.toLowerCase().includes('captcha') ||
+                        (proxyError.response.status === 403 && errorMsg.toLowerCase().includes('forbidden')) ||
+                        proxyError.response.status === 405) {
+                        console.log(chalk_1.default.red(`Client proxy server has CAPTCHA protection, cannot use this endpoint`));
+                        captchaDetected = true;
+                    }
+                    else {
+                        console.log(chalk_1.default.yellow(`Client proxy server failed: ${proxyError.message}`));
+                    }
+                }
+                else {
+                    console.log(chalk_1.default.yellow(`Client proxy server failed: ${proxyError.message}`));
+                }
+            }
+        }
+        return {
+            success: false,
+            error: 'Failed to post comment after trying all endpoints',
+            captchaDetected
+        };
+    }
+    catch (error) {
+        console.error(chalk_1.default.red(`Error posting comment: ${error.message}`));
+        return {
+            success: false,
+            error: error.message,
+            captchaDetected
+        };
+    }
+}
+exports.postComment = postComment;
+/**
+ * Simulate browsing to a token page before posting
+ * @param client Axios client to use
+ * @param tokenMint The token mint address
+ */
+async function simulateTokenBrowsing(client, tokenMint) {
+    console.log(chalk_1.default.gray(`Simulating browsing to token page for ${tokenMint.substring(0, 8)}...`));
+    // First, visit the tokens page
+    await client.get('https://pump.fun/board', {
+        headers: {
+            ...(0, PumpFunAuth_1.getBrowserLikeHeaders)(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+        },
+        timeout: 15000,
+        withCredentials: true
+    });
+    // Wait a bit like a human browsing
+    await (0, transaction_1.sleep)(Math.floor(Math.random() * 1500) + 1000);
+    // Then visit the specific token page
+    await client.get(`https://pump.fun/coin/${tokenMint}`, {
+        headers: {
+            ...(0, PumpFunAuth_1.getBrowserLikeHeaders)(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+        },
+        timeout: 15000,
+        withCredentials: true
+    });
+    // Wait as if reading token details
+    await (0, transaction_1.sleep)(Math.floor(Math.random() * 2000) + 1500);
+    // Now fetch the comments API endpoint to simulate viewing comments
+    const commentsApiUrl = `${API_V3_URL}/replies/${tokenMint}`;
+    await client.get(commentsApiUrl, {
+        headers: {
+            ...(0, PumpFunAuth_1.getBrowserLikeHeaders)(),
+            'Accept': 'application/json'
+        },
+        timeout: 15000,
+        withCredentials: true
+    });
+    // Wait as if reading comments
+    await (0, transaction_1.sleep)(Math.floor(Math.random() * 2000) + 2000);
+    console.log(chalk_1.default.gray(`Browsing simulation complete for ${tokenMint.substring(0, 8)}`));
+}
+/**
+ * Post comment to the API with retries across different endpoints
+ * @param client Axios client to use
+ * @param tokenMint Token mint address
+ * @param comment Comment text to post
+ * @param authToken Authentication token
+ * @param awsToken AWS token for proxy server authentication (optional)
+ * @param maxRetries Maximum number of retries
+ * @param timeout Timeout in milliseconds
+ * @returns Result of the posting operation
+ */
+async function postCommentWithRetries(client, tokenMint, comment, authToken, awsToken = null, maxRetries = 3, timeout = 30000) {
+    // Endpoints that actually work based on reference code and testing
+    const endpoints = [
+        { url: CLIENT_PROXY_URL, path: COMMENT_ENDPOINT, useCookie: true },
+        { url: API_V3_URL, path: REPLIES_ENDPOINT, useCookie: false },
+        { url: "https://pump-fe.helius-rpc.com", path: REPLIES_ENDPOINT, useCookie: false },
+        { url: "https://frontend-api-v2.pump.fun", path: REPLIES_ENDPOINT, useCookie: false }
+    ];
+    let lastError = '';
+    // Try each endpoint up to maxRetries times
+    for (const endpoint of endpoints) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(chalk_1.default.cyan(`Attempting to post comment via ${endpoint.url} (attempt ${attempt}/${maxRetries})...`));
+                // Add variation in timing between retries
+                if (attempt > 1) {
+                    const delay = Math.floor(Math.random() * 1000) + 500 * attempt;
+                    await (0, transaction_1.sleep)(delay);
+                }
+                // Prepare the comment payload
+                const payload = {
+                    text: comment,
+                    mint: tokenMint,
+                    replyToId: null // This is a top-level comment, not a reply
+                };
+                // Prepare headers with authentication
+                const headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "*/*",
+                    "Origin": "https://pump.fun",
+                    "Referer": "https://pump.fun/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                };
+                // Add auth token as cookie or Authorization header based on endpoint
+                if (endpoint.useCookie) {
+                    // For client-proxy-server, use Cookie and X-Aws-Proxy-Token
+                    headers['Cookie'] = `auth_token=${authToken}`;
+                    if (awsToken) {
+                        headers['X-Aws-Proxy-Token'] = awsToken;
+                    }
+                }
+                else {
+                    // For regular API endpoints, use Authorization bearer
+                    headers['Authorization'] = `Bearer ${authToken}`;
+                }
+                // Post the comment
+                const postResponse = await client.post(`${endpoint.url}${endpoint.path}`, payload, {
+                    headers: headers,
+                    timeout: timeout,
+                    withCredentials: true
+                });
+                // Check for successful response
+                if (postResponse.status >= 200 && postResponse.status < 300) {
+                    const commentId = postResponse.data?.id || postResponse.data?.commentId;
+                    if (commentId) {
+                        // If we got a comment ID, the post was successful
+                        return {
+                            success: true,
+                            token: authToken,
+                            commentId: commentId
+                        };
+                    }
+                    else {
+                        console.log(chalk_1.default.yellow(`Posted comment but received no ID. Continuing...`));
+                        // Success without ID
+                        return {
+                            success: true,
+                            token: authToken
+                        };
+                    }
+                }
+                else {
+                    lastError = `Unexpected status code: ${postResponse.status}`;
+                }
+            }
+            catch (error) {
+                lastError = error.message;
+                // Check if we're getting a CAPTCHA challenge
+                if (error.response?.data && typeof error.response.data === 'string' &&
+                    (error.response.data.includes('captcha') ||
+                        error.response.data.includes('CAPTCHA') ||
+                        error.response.data.includes('Human Verification'))) {
+                    return {
+                        success: false,
+                        error: 'CAPTCHA verification required',
+                        captchaDetected: true
+                    };
+                }
+                // If it's a 401/403, the auth token might be invalid - don't retry
+                if (error.response?.status === 401 || error.response?.status === 403) {
+                    console.log(chalk_1.default.red(`Authentication error (${error.response.status}). Token may be invalid.`));
+                    break; // Break out of attempts for this endpoint, try another endpoint
+                }
+                console.log(chalk_1.default.yellow(`Attempt ${attempt} failed: ${error.message}`));
+            }
+        }
+    }
+    // If we've tried all endpoints and retries with no success
+    return {
+        success: false,
+        error: lastError || 'Failed to post comment after all retries'
+    };
+}
+/**
+ * Check if comments are enabled for a token
+ * @param tokenMint Token mint address
+ * @param proxy Optional proxy to use
+ * @param awsToken Optional AWS token for authenticated check
+ * @param authToken Optional auth token for authenticated check
+ * @returns True if comments are enabled
+ */
+async function checkCommentsEnabled(tokenMint, proxy, awsToken, authToken) {
+    try {
+        const client = (0, PumpFunAuth_1.createAxiosInstance)(proxy);
+        const headers = (0, PumpFunAuth_1.getBrowserLikeHeaders)();
+        // Add authentication headers if provided
+        if (authToken) {
+            headers['Cookie'] = `auth_token=${authToken}`;
+        }
+        if (awsToken) {
+            headers['X-Aws-Proxy-Token'] = awsToken;
+        }
+        const response = await client.get(`${API_V3_URL}/coins/${tokenMint}`, {
+            headers: headers,
+            timeout: 15000
+        });
+        // Check if comments are enabled in token data
+        return response.data?.commentsEnabled !== false;
+    }
+    catch (error) {
+        console.log(chalk_1.default.yellow(`Could not check if comments are enabled: ${error instanceof Error ? error.message : String(error)}`));
+        // Default to true if we can't check
+        return true;
+    }
+}
+exports.checkCommentsEnabled = checkCommentsEnabled;

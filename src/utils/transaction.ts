@@ -1031,7 +1031,6 @@ export async function bundleTokenTransfersFromSubwallets(
           tokenAccount,
           keypair.publicKey, // Send rent back to owner
           keypair.publicKey, // Authority
-          [],
           programId
         )
       );

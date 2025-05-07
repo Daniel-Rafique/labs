@@ -1,53 +1,123 @@
 /**
- * Safe wrapper for bigint-buffer with length validation
- * This prevents buffer overflow vulnerabilities
+ * Secure implementation of bigint-buffer functions to avoid buffer overflow vulnerabilities.
+ * This implementation provides safe alternatives to the vulnerable bigint-buffer package.
  */
 
-import * as originalBigInt from 'bigint-buffer';
-
-const MAX_SAFE_BUFFER_SIZE = 8192;
-const DEFAULT_BUFFER_SIZE = 32; // Default size for bigint buffer (256 bits)
-
-export function toBufferLE(value: bigint, length?: number): Buffer {
-  // Default width if not provided
-  const width = length ?? DEFAULT_BUFFER_SIZE;
-  
-  // Perform input validation
-  if (width > MAX_SAFE_BUFFER_SIZE) {
-    throw new RangeError(`Buffer length too large: ${width} exceeds max safe size ${MAX_SAFE_BUFFER_SIZE}`);
+/**
+ * Convert a Buffer to a BigInt (little endian)
+ */
+export function toBigIntLE(buffer: Uint8Array): bigint {
+  if (!buffer || buffer.length === 0) {
+    return BigInt(0);
   }
   
-  return originalBigInt.toBufferLE(value, width);
-}
-
-export function toBufferBE(value: bigint, length?: number): Buffer {
-  // Default width if not provided
-  const width = length ?? DEFAULT_BUFFER_SIZE;
-  
-  // Perform input validation
-  if (width > MAX_SAFE_BUFFER_SIZE) {
-    throw new RangeError(`Buffer length too large: ${width} exceeds max safe size ${MAX_SAFE_BUFFER_SIZE}`);
+  // Safety check
+  if (buffer.length > 8192) { // Prevent excessively large buffers
+    throw new Error('Buffer too large');
   }
   
-  return originalBigInt.toBufferBE(value, width);
+  let result = BigInt(0);
+  let base = BigInt(1);
+  
+  // Process each byte from least significant to most significant
+  for (let i = 0; i < buffer.length; i++) {
+    result += BigInt(buffer[i]) * base;
+    base <<= BigInt(8);
+  }
+  
+  return result;
 }
 
-export function toBigIntLE(buffer: Buffer | Uint8Array): bigint {
-  // Perform input validation
-  if (buffer.length > MAX_SAFE_BUFFER_SIZE) {
-    throw new RangeError(`Buffer length too large: ${buffer.length} exceeds max safe size ${MAX_SAFE_BUFFER_SIZE}`);
+/**
+ * Convert a Buffer to a BigInt (big endian)
+ */
+export function toBigIntBE(buffer: Uint8Array): bigint {
+  if (!buffer || buffer.length === 0) {
+    return BigInt(0);
   }
-  // Convert Uint8Array to Buffer if needed
-  const bufferObj = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-  return originalBigInt.toBigIntLE(bufferObj);
+  
+  // Safety check
+  if (buffer.length > 8192) { // Prevent excessively large buffers
+    throw new Error('Buffer too large');
+  }
+  
+  let result = BigInt(0);
+  
+  // Process each byte from most significant to least significant
+  for (let i = 0; i < buffer.length; i++) {
+    result = (result << BigInt(8)) | BigInt(buffer[i]);
+  }
+  
+  return result;
 }
 
-export function toBigIntBE(buffer: Buffer | Uint8Array): bigint {
-  // Perform input validation
-  if (buffer.length > MAX_SAFE_BUFFER_SIZE) {
-    throw new RangeError(`Buffer length too large: ${buffer.length} exceeds max safe size ${MAX_SAFE_BUFFER_SIZE}`);
+/**
+ * Convert a BigInt to a Buffer (little endian)
+ */
+export function toBufferLE(bigint: bigint, byteLength?: number): Buffer {
+  if (typeof bigint !== 'bigint') {
+    throw new Error('Input must be a bigint');
   }
-  // Convert Uint8Array to Buffer if needed
-  const bufferObj = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-  return originalBigInt.toBigIntBE(bufferObj);
+  
+  // Handle negative values
+  let negative = false;
+  if (bigint < BigInt(0)) {
+    negative = true;
+    bigint = -bigint;
+  }
+  
+  // Convert to byte array
+  const bytes: number[] = [];
+  while (bigint > BigInt(0)) {
+    bytes.push(Number(bigint & BigInt(0xFF)));
+    bigint >>= BigInt(8);
+  }
+  
+  // If byteLength is specified, pad or truncate
+  if (byteLength !== undefined) {
+    while (bytes.length < byteLength) {
+      bytes.push(0);
+    }
+    
+    if (bytes.length > byteLength) {
+      bytes.length = byteLength;
+    }
+  }
+  
+  // If the number was negative, apply two's complement
+  if (negative) {
+    // First invert all bits
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = ~bytes[i] & 0xFF;
+    }
+    
+    // Then add 1
+    let carry = 1;
+    for (let i = 0; i < bytes.length; i++) {
+      const sum = bytes[i] + carry;
+      bytes[i] = sum & 0xFF;
+      carry = sum > 0xFF ? 1 : 0;
+      if (carry === 0) break;
+    }
+  }
+  
+  return Buffer.from(bytes);
 }
+
+/**
+ * Convert a BigInt to a Buffer (big endian)
+ */
+export function toBufferBE(bigint: bigint, byteLength?: number): Buffer {
+  const leBuffer = toBufferLE(bigint, byteLength);
+  return Buffer.from([...leBuffer].reverse());
+}
+
+/**
+ * Export all functions as default
+ */
+export default {
+  toBigIntLE,
+  toBigIntBE,
+  toBufferLE,
+  toBufferBE
+};
