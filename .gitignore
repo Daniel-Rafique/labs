@@ -1,0 +1,26 @@
+node_modules/
+patches/
+releases/
+.config/
+.env
+.vscode/
+models/
+dist/models/
+dist/core/models/
+dist/wallets.json
+dist/wallets.json-bak
+dist/wallets.json-bak2
+dist/trade_log.json
+dist/.DS_Store
+.DS_Store
+combined.log
+
+# Ignore all trade_log.json and token_data.json files in strategy subdirectories
+dist/strategies/**/logs/*.jsondist/core/models/
+dist/core/models/
+# Ignore model files
+dist/core/models/*.json
+
+# Ignore log files
+dist/strategies/*/logs/*.json
+PumpFun
