@@ -40,6 +40,9 @@ async function setupProxyCommand(options = {}) {
     console.log(chalk_1.default.cyan('\n==== Proxy Configuration ===='));
     try {
         const proxyManager = (0, proxyManager_1.getProxyManager)();
+        // Set default timeout and retries if not provided
+        options.timeout = options.timeout || 30000; // 30 seconds default timeout
+        options.retries = options.retries || 3; // 3 retries by default
         // If no specific options provided, prompt for proxy service
         if (!options.service) {
             const serviceAnswer = await inquirer_1.default.prompt([
@@ -57,13 +60,48 @@ async function setupProxyCommand(options = {}) {
             ]);
             options.service = serviceAnswer.service;
         }
+        // Prompt for advanced options if not headless
+        if (!options.username && !options.password) {
+            const advancedOptionsAnswer = await inquirer_1.default.prompt([
+                {
+                    type: 'confirm',
+                    name: 'configureAdvanced',
+                    message: 'Would you like to configure advanced proxy settings?',
+                    default: false
+                }
+            ]);
+            if (advancedOptionsAnswer.configureAdvanced) {
+                const advancedOptions = await inquirer_1.default.prompt([
+                    {
+                        type: 'number',
+                        name: 'timeout',
+                        message: 'Connection timeout in milliseconds:',
+                        default: options.timeout,
+                        validate: (input) => {
+                            return !isNaN(input) && input >= 5000 ? true : 'Timeout must be at least 5000ms (5 seconds)';
+                        }
+                    },
+                    {
+                        type: 'number',
+                        name: 'retries',
+                        message: 'Number of connection retries:',
+                        default: options.retries,
+                        validate: (input) => {
+                            return !isNaN(input) && input >= 1 ? true : 'Must have at least 1 retry';
+                        }
+                    }
+                ]);
+                options.timeout = advancedOptions.timeout;
+                options.retries = advancedOptions.retries;
+            }
+        }
         // Handle different proxy services
         switch (options.service) {
             case 'oxylabs':
                 await setupOxylabs(proxyManager, options);
                 break;
             case 'manual':
-                await setupManualProxy(proxyManager);
+                await setupManualProxy(proxyManager, options);
                 break;
             case 'disable':
                 await disableProxies(proxyManager);
@@ -74,7 +112,7 @@ async function setupProxyCommand(options = {}) {
         }
         // Test proxy connection if requested
         if (options.test || (await shouldTestConnection())) {
-            await testProxyConnection(proxyManager);
+            await testProxyConnection(proxyManager, options);
         }
         console.log(chalk_1.default.cyan('\n==== Proxy Setup Complete ===='));
     }
@@ -90,6 +128,38 @@ async function setupOxylabs(proxyManager, options) {
     console.log(chalk_1.default.cyan('\nSetting up Oxylabs Residential Proxies'));
     console.log(chalk_1.default.blue('Oxylabs proxies provide rotating IPs from real residential devices'));
     let { username, password } = options;
+    // Try to read from existing config if available
+    if (!username || !password) {
+        const configPath = path.join(process.cwd(), '.config', 'proxies.json');
+        if (fs.existsSync(configPath)) {
+            try {
+                const existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (existingConfig && existingConfig.length > 0 &&
+                    existingConfig[0].type === 'oxylabs' &&
+                    existingConfig[0].auth &&
+                    existingConfig[0].auth.username &&
+                    existingConfig[0].auth.password) {
+                    const useExistingConfig = await inquirer_1.default.prompt([
+                        {
+                            type: 'confirm',
+                            name: 'useExisting',
+                            message: 'Existing Oxylabs credentials found. Use these?',
+                            default: true
+                        }
+                    ]);
+                    if (useExistingConfig.useExisting) {
+                        username = existingConfig[0].auth.username;
+                        password = existingConfig[0].auth.password;
+                        console.log(chalk_1.default.green('Using existing Oxylabs credentials'));
+                    }
+                }
+            }
+            catch (e) {
+                // Ignore errors reading existing config
+                console.log(chalk_1.default.yellow('Error reading existing config, will prompt for new credentials'));
+            }
+        }
+    }
     // Prompt for credentials if not provided
     if (!username || !password) {
         const credentialsAnswers = await inquirer_1.default.prompt([
@@ -116,14 +186,19 @@ async function setupOxylabs(proxyManager, options) {
     if (!username || !password) {
         throw new Error('Username and password are required for Oxylabs configuration');
     }
-    // Configure Oxylabs proxies
-    proxyManager.configureOxylabs(username, password);
+    // Configure Oxylabs proxies with timeout settings
+    proxyManager.configureOxylabs(username, password, {
+        timeout: options.timeout || 30000,
+        retries: options.retries || 3,
+        sessionDuration: 600 // 10 minute session duration for better stability
+    });
     console.log(chalk_1.default.green('Oxylabs residential proxies configured successfully!'));
+    console.log(chalk_1.default.blue(`Connection timeout set to ${options.timeout || 30000}ms with ${options.retries || 3} retries`));
 }
 /**
  * Setup manual proxy configuration
  */
-async function setupManualProxy(proxyManager) {
+async function setupManualProxy(proxyManager, options) {
     console.log(chalk_1.default.cyan('\nManual Proxy Configuration'));
     const proxyAnswers = await inquirer_1.default.prompt([
         {
@@ -166,11 +241,14 @@ async function setupManualProxy(proxyManager) {
         port: proxyAnswers.port,
         username: proxyAnswers.username,
         password: proxyAnswers.password,
-        protocol: proxyAnswers.protocol
+        protocol: proxyAnswers.protocol,
+        timeout: options.timeout || 30000,
+        retries: options.retries || 3
     };
     // Add the proxy configuration
     proxyManager.addProxy(proxyConfig);
     console.log(chalk_1.default.green('Manual proxy configuration added successfully!'));
+    console.log(chalk_1.default.blue(`Connection timeout set to ${options.timeout || 30000}ms with ${options.retries || 3} retries`));
 }
 /**
  * Disable proxies
@@ -208,25 +286,70 @@ async function shouldTestConnection() {
 /**
  * Test the proxy connection
  */
-async function testProxyConnection(proxyManager) {
+async function testProxyConnection(proxyManager, options = {}) {
     console.log(chalk_1.default.cyan('\nTesting proxy connection...'));
     if (!proxyManager.isEnabled()) {
         console.log(chalk_1.default.yellow('Proxy support is not enabled. Test skipped.'));
         return;
     }
     const spinner = (0, ora_1.default)('Connecting through proxy...').start();
+    // Helper function to retry test
+    const retryTest = async (testFn, maxRetries = options.retries || 3, delay = 2000) => {
+        let lastError;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return await testFn();
+            }
+            catch (error) {
+                lastError = error;
+                if (attempt < maxRetries) {
+                    spinner.text = `Retry ${attempt}/${maxRetries}: ${error.message}`;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    // Increase delay for next retry
+                    delay = Math.min(delay * 1.5, 10000);
+                }
+            }
+        }
+        throw lastError;
+    };
     try {
-        // Test the first connection
-        const result = await proxyManager.testProxy();
+        // Test the first connection with retries
+        const result = await retryTest(() => proxyManager.testProxy());
         if (result.success && result.ip) {
             spinner.succeed(`Connected successfully through IP: ${result.ip}`);
+            // Show additional connection info
+            if (result.details) {
+                console.log(chalk_1.default.blue(`Location: ${result.details.country || 'Unknown'}`));
+                console.log(chalk_1.default.blue(`Provider: ${result.details.provider || 'Unknown'}`));
+            }
+            // Test connection to pump.fun specifically
+            spinner.text = 'Testing connection to pump.fun API...';
+            spinner.start();
+            try {
+                // Test connection to pump.fun API
+                const apiResponse = await fetch('https://frontend-api-v3.pump.fun/health', {
+                    // @ts-ignore
+                    agent: proxyManager.getAxiosConfig().httpsAgent,
+                    timeout: options.timeout || 30000
+                });
+                if (apiResponse.ok) {
+                    spinner.succeed('Successfully connected to pump.fun API');
+                }
+                else {
+                    spinner.warn(`Connected to pump.fun but received status ${apiResponse.status}`);
+                }
+            }
+            catch (apiError) {
+                spinner.warn(`Could not connect to pump.fun API: ${apiError.message}`);
+                console.log(chalk_1.default.yellow('This may cause issues with profile creation and other API interactions'));
+            }
             // Test rotation by testing a second connection
             spinner.text = 'Testing IP rotation...';
             spinner.start();
             // Rotate the proxy
             proxyManager.rotateProxy();
             // Test again with the new proxy
-            const result2 = await proxyManager.testProxy();
+            const result2 = await retryTest(() => proxyManager.testProxy());
             if (result2.success && result2.ip) {
                 if (result2.ip !== result.ip) {
                     spinner.succeed(`IP rotation successful! New IP: ${result2.ip}`);
@@ -239,27 +362,28 @@ async function testProxyConnection(proxyManager) {
             else {
                 spinner.fail(`Failed to connect after rotation: ${result2.message}`);
             }
-            // Test with specific country
-            spinner.text = 'Testing country-specific connection...';
-            spinner.start();
-            // Select a random country from this list
-            const countries = ['US', 'GB', 'DE', 'FR', 'JP'];
-            const randomCountry = countries[Math.floor(Math.random() * countries.length)];
-            const countryTest = await testCountrySpecificProxy(proxyManager, randomCountry);
-            if (countryTest.success) {
-                spinner.succeed(countryTest.message);
-            }
-            else {
-                spinner.warn(countryTest.message);
+            // Suggest verifying Oxylabs credentials if appropriate
+            if (options.service === 'oxylabs') {
+                console.log(chalk_1.default.blue('Recommendation: If you continue to experience connection issues:'));
+                console.log(chalk_1.default.blue('1. Verify your Oxylabs credentials at https://client.oxylabs.io/'));
+                console.log(chalk_1.default.blue('2. Check if your subscription is active'));
+                console.log(chalk_1.default.blue('3. Try using a country-specific proxy with the "country" parameter'));
             }
         }
         else {
             spinner.fail(`Proxy connection failed: ${result.message}`);
             console.log(chalk_1.default.yellow('Please check your proxy configuration and credentials.'));
+            // Provide troubleshooting tips
+            console.log(chalk_1.default.cyan('\nTroubleshooting tips:'));
+            console.log(chalk_1.default.cyan('1. Verify your proxy credentials are correct'));
+            console.log(chalk_1.default.cyan('2. Try increasing the connection timeout'));
+            console.log(chalk_1.default.cyan('3. Check if your proxy service is operational'));
+            console.log(chalk_1.default.cyan('4. Try a different proxy provider'));
         }
     }
     catch (error) {
         spinner.fail(`Error testing proxy: ${error.message}`);
+        console.log(chalk_1.default.red('Proxy test failed after multiple retries.'));
     }
 }
 /**
@@ -270,7 +394,8 @@ async function testCountrySpecificProxy(proxyManager, country) {
         const config = proxyManager.getAxiosConfig(country);
         const response = await fetch('https://ip.oxylabs.io/location', {
             // @ts-ignore - the node-fetch types are a bit different
-            agent: config.httpsAgent
+            agent: config.httpsAgent,
+            timeout: 30000 // Use longer timeout for location-specific connections
         });
         if (!response.ok) {
             return {

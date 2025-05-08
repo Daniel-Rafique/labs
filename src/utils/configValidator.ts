@@ -89,7 +89,7 @@ export function showConfigurationError(validationResult: ConfigValidationResult)
     chalk.red('\n╔════════════════════════════════════════════════════════════╗')
   );
   console.log(
-    chalk.red('║              CONFIGURATION ERROR                          ║')
+    chalk.red('║              CONFIGURATION SETUP                          ║')
   );
   console.log(
     chalk.red('╚════════════════════════════════════════════════════════════╝')

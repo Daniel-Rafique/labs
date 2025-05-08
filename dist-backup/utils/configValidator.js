@@ -74,7 +74,7 @@ exports.checkOptionalConfig = checkOptionalConfig;
  */
 function showConfigurationError(validationResult) {
     console.log(chalk_1.default.red('\n╔════════════════════════════════════════════════════════════╗'));
-    console.log(chalk_1.default.red('║              CONFIGURATION ERROR                          ║'));
+    console.log(chalk_1.default.red('║              CONFIGURATION SETUP                          ║'));
     console.log(chalk_1.default.red('╚════════════════════════════════════════════════════════════╝'));
     console.log(chalk_1.default.yellow('\nThe following required configuration is missing:'));
     for (const item of validationResult.missingItems) {

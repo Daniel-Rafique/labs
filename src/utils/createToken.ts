@@ -1,24 +1,15 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import chalk from 'chalk';
+import fs from 'fs';
+import path from 'path';
 import axios from 'axios';
 import FormData from 'form-data';
-import { loadWallets, walletDataToKeypair, resolveWalletPath, WalletData } from './wallet';
+import { loadWallets, walletDataToKeypair } from './wallet';
 import logger from './logger';
-import { enhancedAuthenticate } from './PumpFunWrapper';
-import { getProxyManager } from './proxyManager';
-import chalk from 'chalk';
+import { Keypair, VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 // Sleep function to add delay if needed
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
-
-interface TokenMetadata {
-  name: string;
-  symbol: string;
-  description: string;
-  twitter?: string;
-  telegram?: string;
-  website?: string;
-}
 
 interface TokenCreationOptions {
   tokenName: string;
@@ -30,130 +21,17 @@ interface TokenCreationOptions {
   website?: string;
   initialBuys: number;
   creatorWalletIndex: number;
-  useProxy?: boolean;
 }
 
 interface TokenCreationResult {
   success: boolean;
   mintAddress?: string;
   error?: string;
-}
-
-// Transaction types
-interface BaseTransactionArg {
-  publicKey: string;
-  action: string;
-  mint: string;
-  denominatedInSol: string;
-  amount: number;
-  slippage: number;
-  priorityFee: number;
-  pool: string;
-}
-
-interface CreateTransactionArg extends BaseTransactionArg {
-  action: 'create';
-  tokenMetadata: {
-    name: string;
-    symbol: string;
-    uri: string;
-  };
-}
-
-interface BuyTransactionArg extends BaseTransactionArg {
-  action: 'buy';
-}
-
-type TransactionArg = CreateTransactionArg | BuyTransactionArg;
-
-/**
- * Upload token logo to IPFS through pump.fun
- * @param authToken Auth token for pump.fun
- * @param logoPath Path to logo file
- * @param useProxy Whether to use proxy for the upload
- * @param sessionId Optional session ID for consistent proxy usage
- * @returns IPFS URL if successful, or null if failed
- */
-async function uploadLogo(
-  authToken: string, 
-  logoPath: string,
-  useProxy: boolean = false,
-  sessionId?: string
-): Promise<string | null> {
-  try {
-    // Check if file exists
-    if (!fs.existsSync(logoPath)) {
-      throw new Error(`Logo file not found: ${logoPath}`);
-    }
-    
-    const fileData = fs.readFileSync(logoPath);
-    const filename = path.basename(logoPath);
-    const PUMP_FUN_API_URL = "https://pump.fun/api/ipfs";
-    
-    const formData = new FormData();
-    formData.append("file", fileData, filename);
-    
-    const headers: Record<string, string> = {
-      accept: "*/*",
-      "accept-language": "en-US,en;q=0.9",
-      origin: "https://pump.fun",
-      referer: "https://pump.fun/create",
-      "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": '"macOS"',
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-origin",
-      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    };
-    
-    if (authToken) {
-      headers.Cookie = `auth_token=${authToken}`;
-    }
-    
-    const requestConfig: any = {
-      headers: {
-        ...headers,
-        ...formData.getHeaders(),
-      }
-    };
-    
-    // Add proxy configuration if enabled
-    if (useProxy) {
-      const proxyManager = getProxyManager();
-      
-      if (proxyManager.isEnabled()) {
-        console.log(chalk.cyan(`Using proxy for logo upload ${sessionId ? `(session: ${sessionId})` : ''}`));
-        const proxyConfig = proxyManager.getAxiosConfig(undefined, undefined, sessionId);
-        
-        if (proxyConfig.httpsAgent) {
-          requestConfig.httpsAgent = proxyConfig.httpsAgent;
-          requestConfig.httpAgent = proxyConfig.httpsAgent;
-        }
-      } else {
-        console.log(chalk.yellow("Proxy requested but not enabled. Using direct connection for logo upload."));
-      }
-    }
-    
-    console.log(chalk.blue(`Uploading logo to IPFS...`));
-    const response = await axios.post(PUMP_FUN_API_URL, formData, requestConfig);
-    
-    if (response.data && response.data.metadata && response.data.metadata.image) {
-      console.log(chalk.green(`Logo uploaded successfully: ${response.data.metadata.image}`));
-      return response.data.metadata.image;
-    } else {
-      console.log(chalk.red(`Failed to upload logo: no image URL in response`));
-      return null;
-    }
-  } catch (error: any) {
-    console.error(chalk.red(`Error uploading logo: ${error.message}`));
-    logger.error('Logo upload error', error);
-    return null;
-  }
+  transactions?: string[];
 }
 
 /**
- * Create token on pump.fun
+ * Create token on pump.fun using the pumpportal.fun API
  * @param options Token creation options
  * @returns Result object with success status and mint address or error
  */
@@ -170,205 +48,214 @@ export async function createToken(options: TokenCreationOptions): Promise<TokenC
       throw new Error(`Creator wallet index ${options.creatorWalletIndex} out of bounds (${wallets.length} wallets available)`);
     }
     
+    // Check if we have enough wallets for initial buys
+    const totalWalletsNeeded = options.initialBuys + 1; // +1 for creator wallet
+    if (wallets.length < totalWalletsNeeded) {
+      console.log(chalk.yellow(`Warning: Not enough wallets for ${options.initialBuys} initial buys. Will use ${wallets.length - 1} wallets instead.`));
+      options.initialBuys = Math.max(0, wallets.length - 1);
+    }
+    
+    // Prepare signer keypairs
+    console.log(chalk.cyan('Preparing wallet keypairs...'));
+    const signerKeyPairs: Keypair[] = [];
+    
+    // Convert creator wallet to keypair and add to signers
     const creatorWallet = wallets[options.creatorWalletIndex];
     console.log(chalk.cyan(`Using creator wallet: ${creatorWallet.publicKey}`));
+    const creatorKeypair = walletDataToKeypair(creatorWallet);
+    signerKeyPairs.push(creatorKeypair);
     
-    // Check if proxy support is enabled
-    const useProxy = options.useProxy !== undefined ? options.useProxy : 
-                    (process.env.USE_PROXIES === 'true' || false);
-    
-    // Create a consistent proxy session ID for this wallet
-    const sessionId = `token-${creatorWallet.publicKey.substring(0, 8)}`;
-    
-    // Test proxy if enabled
-    if (useProxy) {
-      const proxyManager = getProxyManager();
-      
-      if (proxyManager.isEnabled()) {
-        console.log(chalk.cyan('Proxy support is enabled for token creation'));
-        const testResult = await proxyManager.testProxy();
-        
-        if (testResult.success) {
-          console.log(chalk.green(`Proxy connection successful: ${testResult.ip} (${testResult.message})`));
-        } else {
-          console.log(chalk.yellow(`Proxy test failed: ${testResult.message}. Will try to proceed anyway.`));
-        }
-      } else {
-        console.log(chalk.yellow('Proxies requested but none configured. Continuing without proxy.'));
-      }
-    }
-    
-    // Step 1: Authenticate with pump.fun
-    console.log(chalk.cyan('Authenticating with pump.fun...'));
-    const authResult = await enhancedAuthenticate(creatorWallet, useProxy ? { useProxy, sessionId } : undefined);
-    
-    if (!authResult) {
-      throw new Error('Failed to authenticate with pump.fun');
-    }
-    
-    console.log(chalk.green('Authentication successful'));
-    
-    // Step 2: Upload logo to IPFS
-    const logoUrl = await uploadLogo(authResult.authToken, options.logoPath, useProxy, sessionId);
-    
-    if (!logoUrl) {
-      throw new Error('Failed to upload logo');
-    }
-    
-    // Step 3: Create token via the API
-    console.log(chalk.cyan('Creating token...'));
-    
-    // Set up API client with optional proxy
-    let clientConfig: any = {
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "*/*",
-        "Origin": "https://pump.fun",
-        "Referer": "https://pump.fun/create",
-        "Cookie": `auth_token=${authResult.authToken}`,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-      },
-      timeout: 60000 // 60 second timeout for token creation
-    };
-    
-    // Add proxy configuration if enabled
-    if (useProxy) {
-      const proxyManager = getProxyManager();
-      
-      if (proxyManager.isEnabled()) {
-        // Apply proxy configuration to axios
-        const proxyConfig = proxyManager.getAxiosConfig(undefined, undefined, sessionId);
-        clientConfig = { ...clientConfig, ...proxyConfig };
-        
-        console.log(chalk.cyan('Using proxy for token creation API call'));
-      }
-    }
-    
-    const client = axios.create(clientConfig);
-    
-    // Prepare token data
-    const tokenData = {
-      token_name: options.tokenName,
-      token_symbol: options.tokenSymbol,
-      banner_url: null,  // Banner is optional
-      deployment_cost: 0.01, // Default deployment cost
-      description: options.description,
-      image_url: logoUrl,
-      links: {},
-      publicKey: creatorWallet.publicKey
-    };
-    
-    // Add optional social links if provided
-    if (options.twitter) {
-      tokenData.links['twitter'] = options.twitter;
-    }
-    
-    if (options.telegram) {
-      tokenData.links['telegram'] = options.telegram;
-    }
-    
-    if (options.website) {
-      tokenData.links['website'] = options.website;
-    }
-    
-    // Create token
-    const tokenResponse = await client.post('https://frontend-api-v3.pump.fun/tokens', tokenData);
-    
-    if (!tokenResponse.data || !tokenResponse.data.token_mint) {
-      throw new Error('Failed to create token: Invalid response from API');
-    }
-    
-    const mintAddress = tokenResponse.data.token_mint;
-    console.log(chalk.green(`Token created successfully! Mint address: ${mintAddress}`));
-    
-    // Step 4: Perform initial buys if requested
+    // Add buyer keypairs if needed
     if (options.initialBuys > 0) {
-      const initialBuyWallets = wallets.filter((_, idx) => idx !== options.creatorWalletIndex)
-        .slice(0, options.initialBuys);
+      const buyerWallets = wallets.filter((_, idx) => idx !== options.creatorWalletIndex)
+                             .slice(0, options.initialBuys);
       
-      console.log(chalk.cyan(`Performing ${initialBuyWallets.length} initial buys...`));
+      for (const buyerWallet of buyerWallets) {
+        const buyerKeypair = walletDataToKeypair(buyerWallet);
+        signerKeyPairs.push(buyerKeypair);
+        console.log(chalk.cyan(`Added buyer wallet: ${buyerKeypair.publicKey.toString()}`));
+      }
+    }
+    
+    // Generate a random keypair for the mint
+    console.log(chalk.cyan('Generating mint keypair...'));
+    const mintKeypair = Keypair.generate(); // Generates a random keypair for token
+    const mintPublicKey = mintKeypair.publicKey.toBase58();
+    console.log(chalk.cyan(`Generated mint address: ${mintPublicKey}`));
+    
+    // Check logo file
+    if (!fs.existsSync(options.logoPath)) {
+      throw new Error(`Logo file not found: ${options.logoPath}`);
+    }
+    
+    // Read logo file
+    console.log(chalk.blue(`Reading logo file...`));
+    const fileData = fs.readFileSync(options.logoPath);
+    const filename = path.basename(options.logoPath);
+    
+    // Upload to IPFS
+    console.log(chalk.blue(`Uploading metadata to IPFS...`));
+    const formData = new FormData();
+    formData.append("file", fileData, {
+      filename: filename,
+      contentType: `image/${path.extname(filename).substring(1)}`
+    });
+    formData.append("name", options.tokenName);
+    formData.append("symbol", options.tokenSymbol);
+    formData.append("description", options.description);
+    formData.append("twitter", options.twitter || "");
+    formData.append("telegram", options.telegram || "");
+    formData.append("website", options.website || "");
+    formData.append("showName", "true");
+    
+    const metadataResponse = await axios.post("https://pump.fun/api/ipfs", formData, {
+      headers: {
+        ...formData.getHeaders()
+      }
+    });
+    
+    if (!metadataResponse.data || !metadataResponse.data.metadataUri) {
+      throw new Error('Failed to upload metadata to IPFS');
+    }
+    
+    const metadataUri = metadataResponse.data.metadataUri;
+    console.log(chalk.green(`Metadata uploaded successfully: ${metadataUri}`));
+    
+    // Prepare transaction arguments
+    const bundledTxArgs = [];
+    
+    // Add creator transaction
+    bundledTxArgs.push({
+      publicKey: signerKeyPairs[0].publicKey.toBase58(),
+      action: "create",
+      tokenMetadata: {
+        name: options.tokenName, 
+        symbol: options.tokenSymbol, 
+        uri: metadataUri
+      },
+      mint: mintPublicKey,
+      denominatedInSol: "false",
+      amount: 10000000,
+      slippage: 10,
+      priorityFee: 0.0001, // For Jito tip
+      pool: "pump"
+    });
+    
+    // Add buyer transactions if requested
+    for (let i = 1; i < signerKeyPairs.length; i++) {
+      const buyerKeypair = signerKeyPairs[i];
       
-      for (let i = 0; i < initialBuyWallets.length; i++) {
-        const buyWallet = initialBuyWallets[i];
-        const buyerId = `buyer-${buyWallet.publicKey.substring(0, 8)}`;
+      bundledTxArgs.push({
+        publicKey: buyerKeypair.publicKey.toBase58(),
+        action: "buy",
+        mint: mintPublicKey,
+        denominatedInSol: "false",
+        amount: 10000000,
+        slippage: 10,
+        priorityFee: 0.00005,
+        pool: "pump"
+      });
+    }
+    
+    // Request trade transactions
+    console.log(chalk.cyan(`Requesting trade transactions for ${bundledTxArgs.length} operations...`));
+    
+    try {
+      const response = await axios.post("https://pumpportal.fun/api/trade-local", bundledTxArgs, {
+        headers: {
+          "Content-Type": "application/json"
+        }
+      });
+      
+      if (response.status === 200) {
+        console.log(chalk.green('Successfully generated transactions'));
         
-        console.log(chalk.cyan(`Performing buy #${i+1} with wallet ${buyWallet.publicKey.substring(0, 8)}...`));
+        const transactions = response.data;
+        let encodedSignedTransactions = [];
+        let signatures = [];
+        
+        console.log(chalk.cyan(`Received ${transactions.length} transactions to sign`));
+        
+        // Sign transactions
+        for (let i = 0; i < bundledTxArgs.length; i++) {
+          console.log(chalk.cyan(`Signing transaction ${i+1}/${bundledTxArgs.length}...`));
+          
+          try {
+            const tx = VersionedTransaction.deserialize(new Uint8Array(bs58.decode(transactions[i])));
+            
+            if (bundledTxArgs[i].action === "create") {
+              // Creation transaction needs to be signed by mint and creator keypairs
+              console.log(chalk.cyan(`Signing creation tx with mint and creator keypairs`));
+              tx.sign([mintKeypair, signerKeyPairs[0]]);
+            } else {
+              // Buy transactions signed by corresponding wallet
+              console.log(chalk.cyan(`Signing buy tx with buyer keypair ${i}`));
+              tx.sign([signerKeyPairs[i]]);
+            }
+            
+            encodedSignedTransactions.push(bs58.encode(tx.serialize()));
+            signatures.push(bs58.encode(tx.signatures[0]));
+          } catch (signError: any) {
+            console.error(chalk.red(`Error signing transaction ${i}: ${signError.message}`));
+            throw new Error(`Transaction signing failed: ${signError.message}`);
+          }
+        }
+        
+        // Submit to Jito bundle
+        console.log(chalk.cyan(`Submitting ${encodedSignedTransactions.length} transactions to Jito...`));
         
         try {
-          // Authenticate buyer wallet with pump.fun
-          const buyerAuth = await enhancedAuthenticate(buyWallet, useProxy ? { useProxy, sessionId: buyerId } : undefined);
-          
-          if (!buyerAuth) {
-            console.log(chalk.yellow(`Failed to authenticate buyer wallet ${i+1}, skipping this buy`));
-            continue;
-          }
-          
-          // Set up buyer API client with optional proxy
-          let buyerConfig: any = {
+          const jitoResponse = await axios.post("https://mainnet.block-engine.jito.wtf/api/v1/bundles", {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "sendBundle",
+            params: [
+              encodedSignedTransactions
+            ]
+          }, {
             headers: {
-              "Content-Type": "application/json",
-              "Accept": "*/*",
-              "Origin": "https://pump.fun",
-              "Referer": `https://pump.fun/token/${mintAddress}`,
-              "Cookie": `auth_token=${buyerAuth.authToken}`,
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-            },
-            timeout: 30000
-          };
-          
-          // Add proxy configuration for buyer if enabled
-          if (useProxy) {
-            const proxyManager = getProxyManager();
-            
-            if (proxyManager.isEnabled()) {
-              // Use a different country for each buyer for variety
-              const countries = ['US', 'CA', 'GB', 'DE', 'FR', 'AU'];
-              const randomCountry = countries[i % countries.length];
-              
-              // Apply proxy configuration to axios
-              const proxyConfig = proxyManager.getAxiosConfig(randomCountry, undefined, buyerId);
-              buyerConfig = { ...buyerConfig, ...proxyConfig };
-              
-              console.log(chalk.cyan(`Using proxy for buy #${i+1} (${randomCountry})`));
+              "Content-Type": "application/json"
             }
+          });
+          
+          if (jitoResponse.data && jitoResponse.data.result) {
+            console.log(chalk.green(`Bundle submitted to Jito: ${jitoResponse.data.result}`));
+          } else if (jitoResponse.data && jitoResponse.data.error) {
+            console.error(chalk.red(`Jito error: ${JSON.stringify(jitoResponse.data.error)}`));
+            console.log(chalk.yellow('Transactions may still be processed individually...'));
           }
-          
-          const buyerClient = axios.create(buyerConfig);
-          
-          // Calculate random buy amount between 0.01 and 0.05 SOL
-          const buyAmount = (Math.random() * 0.04 + 0.01).toFixed(4);
-          
-          // Perform buy transaction
-          const buyData = {
-            token_mint: mintAddress,
-            amount: buyAmount
-          };
-          
-          const buyResponse = await buyerClient.post('https://frontend-api-v3.pump.fun/trades/buy', buyData);
-          
-          if (buyResponse.status >= 200 && buyResponse.status < 300) {
-            console.log(chalk.green(`Buy #${i+1} successful: ${buyAmount} SOL`));
-          } else {
-            console.log(chalk.yellow(`Buy #${i+1} returned unexpected status: ${buyResponse.status}`));
-          }
-          
-          // Add random delay between buys
-          if (i < initialBuyWallets.length - 1) {
-            const delay = Math.floor(Math.random() * 5000) + 5000; // 5-10 seconds
-            console.log(chalk.gray(`Waiting ${Math.round(delay/1000)} seconds before next buy...`));
-            await sleep(delay);
-          }
-        } catch (buyError: any) {
-          console.log(chalk.yellow(`Error performing buy #${i+1}: ${buyError.message}`));
-          logger.error(`Buy error for wallet ${i+1}`, buyError);
+        } catch (jitoError: any) {
+          console.error(chalk.red(`Error submitting to Jito: ${jitoError.message}`));
+          console.log(chalk.yellow('Transactions may still be processable individually...'));
         }
+        
+        // Print transaction links
+        console.log(chalk.cyan('\n===== Transaction Summary ====='));
+        for (let i = 0; i < signatures.length; i++) {
+          console.log(chalk.cyan(`Transaction ${i}: https://solscan.io/tx/${signatures[i]}`));
+        }
+        
+        // Print token link
+        console.log(chalk.cyan(`\nView token on Solscan: https://solscan.io/token/${mintPublicKey}`));
+        console.log(chalk.cyan(`View token on Birdeye: https://birdeye.so/token/${mintPublicKey}?chain=solana`));
+        
+        return {
+          success: true,
+          mintAddress: mintPublicKey,
+          transactions: signatures
+        };
+      } else {
+        throw new Error(`API returned status ${response.status}: ${response.statusText}`);
       }
+      
+    } catch (error: any) {
+      console.error(chalk.red(`Error requesting or processing transactions: ${error.message}`));
+      
+      return {
+        success: false,
+        error: error.message
+      };
     }
-    
-    return {
-      success: true,
-      mintAddress
-    };
     
   } catch (error: any) {
     console.error(chalk.red(`Token creation failed: ${error.message}`));
@@ -379,4 +266,4 @@ export async function createToken(options: TokenCreationOptions): Promise<TokenC
       error: error.message
     };
   }
-} 
+}

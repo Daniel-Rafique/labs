@@ -19,9 +19,32 @@ LICENSE_KEY=your-license-key-here
 CONTRACT_ADDRESS=
 TOKEN_MINT_ADDRESS=
 TOKEN_SYMBOL=TOKEN
-MAX_TRADE_AMOUNT=0.005
-MIN_TRADE_AMOUNT=0.0005
-TIME_BETWEEN_BUYS=5000
+
+# ===== Bot Detection Avoidance Settings =====
+# Trade sizes (realistic range between 0.8-2.3 SOL recommended)
+MAX_TRADE_AMOUNT=2.3
+MIN_TRADE_AMOUNT=0.8
+
+# Trade timing (40-120 seconds recommended for realistic delays)
+MIN_DELAY_SECONDS=40
+MAX_DELAY_SECONDS=120
+
+# Legacy timing parameter - will be overridden by MIN/MAX_DELAY_SECONDS if set
+TIME_BETWEEN_BUYS=60000
+
+# Wallet rotation strategy (random, sequential, or weighted)
+WALLET_ROTATION_STRATEGY=random
+
+# Enable adaptive trading to respond to market conditions
+ADAPTIVE_TRADING=true
+
+# Use multiple proxies to distribute trades
+USE_PROXIES=true
+
+# Use AI optimization to adjust parameters based on market
+USE_AI_OPTIMIZATION=true
+# ===== End Bot Detection Avoidance Settings =====
+
 NUMBER_OF_BUYS=3
 NUMBER_OF_CYCLES=1
 JITO=false

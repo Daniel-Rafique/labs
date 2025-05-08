@@ -118,9 +118,10 @@ async function updateMetadataFile(metadata) {
  * @param file Image file buffer
  * @param filename Image filename
  * @param authToken Authentication token
+ * @param proxyConfig Optional proxy configuration
  * @returns Response from upload API
  */
-async function uploadToPumpFun(file, filename, authToken = '') {
+async function uploadToPumpFun(file, filename, authToken = '', proxyConfig) {
     const PUMP_FUN_API_URL = "https://pump.fun/api/ipfs";
     const formData = new form_data_1.default();
     formData.append("file", file, filename);
@@ -141,13 +142,19 @@ async function uploadToPumpFun(file, filename, authToken = '') {
     if (authToken) {
         headers.Cookie = `auth_token=${authToken}`;
     }
+    const requestConfig = {
+        headers: {
+            ...headers,
+            ...formData.getHeaders(),
+        }
+    };
+    // Add proxy configuration if provided
+    if (proxyConfig && proxyConfig.httpsAgent) {
+        requestConfig.httpsAgent = proxyConfig.httpsAgent;
+        requestConfig.httpAgent = proxyConfig.httpsAgent;
+    }
     try {
-        const response = await axios_1.default.post(PUMP_FUN_API_URL, formData, {
-            headers: {
-                ...headers,
-                ...formData.getHeaders(),
-            },
-        });
+        const response = await axios_1.default.post(PUMP_FUN_API_URL, formData, requestConfig);
         return response.data;
     }
     catch (error) {
@@ -158,17 +165,38 @@ async function uploadToPumpFun(file, filename, authToken = '') {
 /**
  * Upload an image to pump.fun's IPFS service
  * @param authToken Optional authentication token
+ * @param useProxy Whether to use proxy for image upload
+ * @param sessionId Optional session ID for consistent proxy usage
  * @returns The uploaded image URL or null if upload failed
  */
-async function uploadImage(authToken = '') {
+async function uploadImage(authToken = '', useProxy = false, sessionId) {
     try {
         const img = await fetchImage();
         if (!img) {
             console.log(chalk_1.default.yellow("No valid image found in the img folder"));
             return null;
         }
+        // Get proxy configuration if needed
+        let proxyConfig = undefined;
+        if (useProxy) {
+            try {
+                // Dynamic import to avoid circular dependencies
+                const { getProxyManager } = await Promise.resolve().then(() => __importStar(require('../proxyManager')));
+                const proxyManager = getProxyManager();
+                if (proxyManager.isEnabled()) {
+                    console.log(chalk_1.default.blue(`Using proxy for image upload ${sessionId ? `(session: ${sessionId})` : ''}`));
+                    proxyConfig = proxyManager.getAxiosConfig(undefined, undefined, sessionId);
+                }
+                else {
+                    console.log(chalk_1.default.yellow("Proxy requested but not enabled. Using direct connection for image upload."));
+                }
+            }
+            catch (e) {
+                console.log(chalk_1.default.yellow(`Error setting up proxy for image upload: ${e instanceof Error ? e.message : String(e)}`));
+            }
+        }
         console.log(chalk_1.default.blue(`Uploading image ${img.filename} to pump.fun IPFS...`));
-        const response = await uploadToPumpFun(img.data, img.filename, authToken);
+        const response = await uploadToPumpFun(img.data, img.filename, authToken, proxyConfig);
         const metadata = response.metadata;
         if (metadata && metadata.image) {
             await updateMetadataFile(metadata);

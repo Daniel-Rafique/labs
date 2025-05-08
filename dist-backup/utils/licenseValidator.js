@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LicenseManager = exports.checkLicense = exports.verifyLicenseOffline = exports.verifyLicenseWithServer = exports.saveLicenseKey = exports.loadLicenseKey = exports.generateHash = exports.getMachineId = void 0;
+exports.LicenseManager = exports.checkLicense = exports.verifyLicenseOffline = exports.verifyLicenseWithServer = exports.saveLicenseCache = exports.loadLicenseCache = exports.saveLicenseKey = exports.loadLicenseKey = exports.generateHash = exports.getMachineId = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const fs_1 = __importDefault(require("fs"));
 const os_1 = __importDefault(require("os"));
@@ -16,6 +16,15 @@ const userHome = os_1.default.homedir();
 const licenseDirPath = path_1.default.join(userHome, '.labs-volume-bot');
 const licenseFilePath = path_1.default.join(licenseDirPath, 'license.key');
 const machineIdPath = path_1.default.join(licenseDirPath, 'machine-id');
+const licenseCachePath = path_1.default.join(licenseDirPath, 'license-cache.json');
+// Cache settings
+const LICENSE_CACHE_DURATION = process.env.LICENSE_CACHE_DURATION
+    ? parseInt(process.env.LICENSE_CACHE_DURATION)
+    : 24 * 60 * 60 * 1000; // Default: 24 hours in milliseconds
+// How often to attempt network verification
+const VERIFICATION_INTERVAL = process.env.VERIFICATION_INTERVAL
+    ? parseInt(process.env.VERIFICATION_INTERVAL)
+    : 6 * 60 * 60 * 1000; // Default: 6 hours in milliseconds
 /**
  * Get a unique machine identifier
  */
@@ -112,9 +121,58 @@ function saveLicenseKey(licenseKey) {
 }
 exports.saveLicenseKey = saveLicenseKey;
 /**
+ * Load cached license data
+ */
+function loadLicenseCache() {
+    try {
+        if (fs_1.default.existsSync(licenseCachePath)) {
+            const cacheData = JSON.parse(fs_1.default.readFileSync(licenseCachePath, 'utf8'));
+            return cacheData;
+        }
+    }
+    catch (error) {
+        console.error('Error reading license cache:', error);
+    }
+    return null;
+}
+exports.loadLicenseCache = loadLicenseCache;
+/**
+ * Save license data to cache
+ */
+function saveLicenseCache(licenseData) {
+    try {
+        if (!fs_1.default.existsSync(licenseDirPath)) {
+            fs_1.default.mkdirSync(licenseDirPath, { recursive: true });
+        }
+        // Set cache expiration
+        const cacheData = {
+            ...licenseData,
+            cachedUntil: Date.now() + LICENSE_CACHE_DURATION
+        };
+        fs_1.default.writeFileSync(licenseCachePath, JSON.stringify(cacheData, null, 2));
+        return true;
+    }
+    catch (error) {
+        console.error('Error saving license cache:', error);
+        return false;
+    }
+}
+exports.saveLicenseCache = saveLicenseCache;
+/**
  * Verify license with server
  */
-async function verifyLicenseWithServer(licenseKey, machineId) {
+async function verifyLicenseWithServer(licenseKey, machineId, forceFresh = false) {
+    // Check cache first if not forcing fresh verification
+    if (!forceFresh) {
+        const cachedLicense = loadLicenseCache();
+        if (cachedLicense &&
+            cachedLicense.licenseKey === licenseKey &&
+            cachedLicense.cachedUntil &&
+            cachedLicense.cachedUntil > Date.now()) {
+            console.log('Using cached license verification data');
+            return cachedLicense;
+        }
+    }
     try {
         const timestamp = Date.now();
         const hash = generateHash(machineId, timestamp);
@@ -132,7 +190,7 @@ async function verifyLicenseWithServer(licenseKey, machineId) {
             timeout: 10000 // 10 second timeout
         });
         if (response.status === 200 && response.data.valid) {
-            return {
+            const licenseData = {
                 valid: true,
                 licenseKey: licenseKey,
                 machineIds: [machineId],
@@ -142,6 +200,9 @@ async function verifyLicenseWithServer(licenseKey, machineId) {
                 senderWallet: response.data.senderWallet || null,
                 tier: response.data.tier || 'basic'
             };
+            // Cache the successful verification
+            saveLicenseCache(licenseData);
+            return licenseData;
         }
         else if (response.status === 401) {
             return {
@@ -223,7 +284,7 @@ exports.verifyLicenseOffline = verifyLicenseOffline;
 /**
  * Main license check function
  */
-async function checkLicense() {
+async function checkLicense(forceFresh = false) {
     try {
         // Load license key
         const licenseKey = loadLicenseKey();
@@ -245,7 +306,7 @@ async function checkLicense() {
         // Try to verify with server
         console.log(`Verifying with server at: ${LICENSE_SERVER}`);
         try {
-            return await verifyLicenseWithServer(licenseKey, machineId);
+            return await verifyLicenseWithServer(licenseKey, machineId, forceFresh);
         }
         catch (serverError) {
             console.log(`Server verification failed: ${serverError instanceof Error ? serverError.message : String(serverError)}`);
@@ -277,6 +338,7 @@ class LicenseManager {
         this.expiryDate = null;
         this.licenseFeatures = [];
         this.offlineMode = process.env.OFFLINE_MODE === 'true';
+        this.lastVerificationTime = 0;
         this.machineId = getMachineId();
         this.initialize().catch(console.error);
     }
@@ -287,6 +349,22 @@ class LicenseManager {
         if (this.initialized)
             return this.licenseStatus;
         try {
+            // Check for cached license data first
+            const cachedLicense = loadLicenseCache();
+            if (cachedLicense &&
+                cachedLicense.valid &&
+                cachedLicense.cachedUntil &&
+                cachedLicense.cachedUntil > Date.now()) {
+                console.log('Using cached license data');
+                this.licenseData = cachedLicense;
+                this.licenseFeatures = cachedLicense.features || ['basic_functionality'];
+                this.licenseStatus = 'VALID';
+                if (cachedLicense.expiresAt) {
+                    this.expiryDate = new Date(cachedLicense.expiresAt);
+                }
+                this.initialized = true;
+                return this.licenseStatus;
+            }
             // Try to load license from environment variable first
             const envLicense = process.env.LICENSE_KEY;
             if (envLicense) {
@@ -320,14 +398,24 @@ class LicenseManager {
     /**
      * Verify a license key
      */
-    async verifyLicense(licenseKey) {
+    async verifyLicense(licenseKey, forceFresh = false) {
+        // Skip network verification if we've checked recently and not forcing a refresh
+        const currentTime = Date.now();
+        if (!forceFresh &&
+            this.lastVerificationTime > 0 &&
+            currentTime - this.lastVerificationTime < VERIFICATION_INTERVAL) {
+            if (this.licenseStatus === 'VALID') {
+                return this.licenseStatus;
+            }
+        }
+        this.lastVerificationTime = currentTime;
         if (this.offlineMode) {
             this.licenseStatus = 'OFFLINE_MODE';
             this.licenseFeatures = ['basic_functionality', 'offline_mode'];
             return this.licenseStatus;
         }
         try {
-            const licenseData = await verifyLicenseWithServer(licenseKey, this.machineId);
+            const licenseData = await verifyLicenseWithServer(licenseKey, this.machineId, forceFresh);
             if (!licenseData.valid) {
                 this.licenseStatus = 'INVALID';
                 return this.licenseStatus;
@@ -391,6 +479,16 @@ class LicenseManager {
      */
     getMachineId() {
         return this.machineId;
+    }
+    /**
+     * Force a fresh license verification
+     */
+    async refreshLicense() {
+        const licenseKey = this.licenseData?.licenseKey || loadLicenseKey();
+        if (licenseKey) {
+            await this.verifyLicense(licenseKey, true);
+        }
+        return this.getLicenseStatus();
     }
 }
 exports.LicenseManager = LicenseManager;

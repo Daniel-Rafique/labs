@@ -15,6 +15,7 @@ export interface LicenseData {
   message?: string;
   offline?: boolean;
   senderWallet?: string;
+  cachedUntil?: number; // Timestamp when cache expires
 }
 
 export interface LicenseStatus {
@@ -32,6 +33,17 @@ const userHome = os.homedir();
 const licenseDirPath = path.join(userHome, '.labs-volume-bot');
 const licenseFilePath = path.join(licenseDirPath, 'license.key');
 const machineIdPath = path.join(licenseDirPath, 'machine-id');
+const licenseCachePath = path.join(licenseDirPath, 'license-cache.json');
+
+// Cache settings
+const LICENSE_CACHE_DURATION = process.env.LICENSE_CACHE_DURATION 
+  ? parseInt(process.env.LICENSE_CACHE_DURATION) 
+  : 24 * 60 * 60 * 1000; // Default: 24 hours in milliseconds
+
+// How often to attempt network verification
+const VERIFICATION_INTERVAL = process.env.VERIFICATION_INTERVAL
+  ? parseInt(process.env.VERIFICATION_INTERVAL)
+  : 6 * 60 * 60 * 1000; // Default: 6 hours in milliseconds
 
 /**
  * Get a unique machine identifier
@@ -133,9 +145,61 @@ export function saveLicenseKey(licenseKey: string): boolean {
 }
 
 /**
+ * Load cached license data
+ */
+export function loadLicenseCache(): LicenseData | null {
+  try {
+    if (fs.existsSync(licenseCachePath)) {
+      const cacheData = JSON.parse(fs.readFileSync(licenseCachePath, 'utf8'));
+      return cacheData;
+    }
+  } catch (error) {
+    console.error('Error reading license cache:', error);
+  }
+  return null;
+}
+
+/**
+ * Save license data to cache
+ */
+export function saveLicenseCache(licenseData: LicenseData): boolean {
+  try {
+    if (!fs.existsSync(licenseDirPath)) {
+      fs.mkdirSync(licenseDirPath, { recursive: true });
+    }
+    
+    // Set cache expiration
+    const cacheData = {
+      ...licenseData,
+      cachedUntil: Date.now() + LICENSE_CACHE_DURATION
+    };
+    
+    fs.writeFileSync(licenseCachePath, JSON.stringify(cacheData, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving license cache:', error);
+    return false;
+  }
+}
+
+/**
  * Verify license with server
  */
-export async function verifyLicenseWithServer(licenseKey: string, machineId: string): Promise<LicenseData> {
+export async function verifyLicenseWithServer(licenseKey: string, machineId: string, forceFresh = false): Promise<LicenseData> {
+  // Check cache first if not forcing fresh verification
+  if (!forceFresh) {
+    const cachedLicense = loadLicenseCache();
+    if (
+      cachedLicense && 
+      cachedLicense.licenseKey === licenseKey && 
+      cachedLicense.cachedUntil && 
+      cachedLicense.cachedUntil > Date.now()
+    ) {
+      console.log('Using cached license verification data');
+      return cachedLicense;
+    }
+  }
+
   try {
     const timestamp = Date.now();
     const hash = generateHash(machineId, timestamp);
@@ -156,7 +220,7 @@ export async function verifyLicenseWithServer(licenseKey: string, machineId: str
     });
     
     if (response.status === 200 && response.data.valid) {
-      return {
+      const licenseData = {
         valid: true,
         licenseKey: licenseKey,
         machineIds: [machineId],
@@ -166,6 +230,11 @@ export async function verifyLicenseWithServer(licenseKey: string, machineId: str
         senderWallet: response.data.senderWallet || null,
         tier: response.data.tier || 'basic'
       };
+      
+      // Cache the successful verification
+      saveLicenseCache(licenseData);
+      
+      return licenseData;
     } else if (response.status === 401) {
       return { 
         valid: false,
@@ -248,7 +317,7 @@ export function verifyLicenseOffline(licenseKey: string): LicenseData {
 /**
  * Main license check function
  */
-export async function checkLicense(): Promise<LicenseData> {
+export async function checkLicense(forceFresh = false): Promise<LicenseData> {
   try {
     // Load license key
     const licenseKey = loadLicenseKey();
@@ -274,7 +343,7 @@ export async function checkLicense(): Promise<LicenseData> {
     // Try to verify with server
     console.log(`Verifying with server at: ${LICENSE_SERVER}`);
     try {
-      return await verifyLicenseWithServer(licenseKey, machineId);
+      return await verifyLicenseWithServer(licenseKey, machineId, forceFresh);
     } catch (serverError) {
       console.log(`Server verification failed: ${serverError instanceof Error ? serverError.message : String(serverError)}`);
       console.log('Falling back to offline check...');
@@ -305,6 +374,7 @@ export class LicenseManager {
   private expiryDate: Date | null = null;
   private licenseFeatures: string[] = [];
   private offlineMode: boolean = process.env.OFFLINE_MODE === 'true';
+  private lastVerificationTime: number = 0;
 
   constructor() {
     this.machineId = getMachineId();
@@ -318,6 +388,27 @@ export class LicenseManager {
     if (this.initialized) return this.licenseStatus;
     
     try {
+      // Check for cached license data first
+      const cachedLicense = loadLicenseCache();
+      if (
+        cachedLicense && 
+        cachedLicense.valid && 
+        cachedLicense.cachedUntil && 
+        cachedLicense.cachedUntil > Date.now()
+      ) {
+        console.log('Using cached license data');
+        this.licenseData = cachedLicense;
+        this.licenseFeatures = cachedLicense.features || ['basic_functionality'];
+        this.licenseStatus = 'VALID';
+        
+        if (cachedLicense.expiresAt) {
+          this.expiryDate = new Date(cachedLicense.expiresAt);
+        }
+        
+        this.initialized = true;
+        return this.licenseStatus;
+      }
+      
       // Try to load license from environment variable first
       const envLicense = process.env.LICENSE_KEY;
       if (envLicense) {
@@ -349,7 +440,21 @@ export class LicenseManager {
   /**
    * Verify a license key
    */
-  async verifyLicense(licenseKey: string): Promise<string> {
+  async verifyLicense(licenseKey: string, forceFresh = false): Promise<string> {
+    // Skip network verification if we've checked recently and not forcing a refresh
+    const currentTime = Date.now();
+    if (
+      !forceFresh && 
+      this.lastVerificationTime > 0 && 
+      currentTime - this.lastVerificationTime < VERIFICATION_INTERVAL
+    ) {
+      if (this.licenseStatus === 'VALID') {
+        return this.licenseStatus;
+      }
+    }
+    
+    this.lastVerificationTime = currentTime;
+    
     if (this.offlineMode) {
       this.licenseStatus = 'OFFLINE_MODE';
       this.licenseFeatures = ['basic_functionality', 'offline_mode'];
@@ -357,7 +462,7 @@ export class LicenseManager {
     }
 
     try {
-      const licenseData = await verifyLicenseWithServer(licenseKey, this.machineId);
+      const licenseData = await verifyLicenseWithServer(licenseKey, this.machineId, forceFresh);
       
       if (!licenseData.valid) {
         this.licenseStatus = 'INVALID';
@@ -431,6 +536,17 @@ export class LicenseManager {
    */
   getMachineId(): string {
     return this.machineId;
+  }
+  
+  /**
+   * Force a fresh license verification
+   */
+  async refreshLicense(): Promise<LicenseStatus> {
+    const licenseKey = this.licenseData?.licenseKey || loadLicenseKey();
+    if (licenseKey) {
+      await this.verifyLicense(licenseKey, true);
+    }
+    return this.getLicenseStatus();
   }
 }
 

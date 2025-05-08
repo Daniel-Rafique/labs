@@ -19,7 +19,7 @@ interface ProxyConfig {
 
 /**
  * Proxy Manager to handle residential proxies
- * Supports Oxylabs and other proxy providers
+ * Optimized for Oxylabs residential proxies
  */
 export class ProxyManager {
   private proxyConfigs: ProxyConfig[] = [];
@@ -84,7 +84,7 @@ export class ProxyManager {
       
       fs.writeFileSync(this.configPath, JSON.stringify(sampleConfig, null, 2));
       console.log(chalk.blue(`Created sample proxy configuration at ${this.configPath}`));
-      console.log(chalk.yellow('Please update with your actual proxy credentials'));
+      console.log(chalk.yellow('Please update with your actual Oxylabs proxy credentials'));
     } catch (error: any) {
       console.error(chalk.red(`Error creating default proxy configuration: ${error.message}`));
     }
@@ -175,38 +175,73 @@ export class ProxyManager {
     // Copy the proxy config so we don't modify the original
     const proxyConfig: ProxyConfig = { ...proxy };
     
-    // Add location or session parameters for Oxylabs
-    if (country || city || sessionId) {
-      // Check if the proxy is from Oxylabs
-      if (proxyConfig.host.includes('oxylabs')) {
-        let modifiedUsername = proxyConfig.username;
+    try {
+      // Focus on optimizing for Oxylabs - add parameters to username
+      let modifiedUsername = proxyConfig.username;
         
-        // Add country if specified
-        if (country) {
-          modifiedUsername += `-cc-${country.toUpperCase()}`;
-        }
-        
-        // Add city if specified
-        if (city) {
-          modifiedUsername += `-city-${city.toLowerCase()}`;
-        }
-        
-        // Add session ID if specified
-        if (sessionId) {
-          modifiedUsername += `-sessid-${sessionId}`;
-        }
-        
-        proxyConfig.username = modifiedUsername;
+      // Add country if specified
+      if (country) {
+        modifiedUsername += `-cc-${country.toUpperCase()}`;
+      } else {
+        // Default to US if no country specified (most reliable for pump.fun)
+        modifiedUsername += `-cc-US`;
       }
-    }
-    
-    // Create appropriate proxy agent based on protocol
-    if (proxyConfig.protocol === 'socks5') {
-      const socksUrl = `socks5://${proxyConfig.username}:${proxyConfig.password}@${proxyConfig.host}:${proxyConfig.port}`;
-      config.httpsAgent = new SocksProxyAgent(socksUrl);
-    } else {
-      const proxyUrl = `${proxyConfig.protocol}://${proxyConfig.username}:${proxyConfig.password}@${proxyConfig.host}:${proxyConfig.port}`;
-      config.httpsAgent = new HttpsProxyAgent(proxyUrl);
+      
+      // Add city if specified
+      if (city) {
+        modifiedUsername += `-city-${city.toLowerCase()}`;
+      }
+      
+      // Add session ID if specified or generate a random one to avoid rate limiting
+      // Always ensure there's a session ID, never use undefined
+      if (sessionId) {
+        // Use provided session ID
+        modifiedUsername += `-sessid-${sessionId}`;
+      } else {
+        // Generate random session ID to avoid reusing the same IP
+        const randomSessionId = Math.floor(Math.random() * 1000000).toString();
+        modifiedUsername += `-sessid-${randomSessionId}`;
+        // Log that we're using a generated session ID
+        console.log(chalk.gray(`Using generated session ID: ${randomSessionId}`));
+      }
+      
+      proxyConfig.username = modifiedUsername;
+      
+      // Create properly encoded proxy URL
+      try {
+        // Ensure username and password are properly encoded
+        const encodedUsername = encodeURIComponent(proxyConfig.username);
+        const encodedPassword = encodeURIComponent(proxyConfig.password);
+        
+        // Use proper URL formatting with encoding
+        const proxyUrl = `${proxyConfig.protocol}://${encodedUsername}:${encodedPassword}@${proxyConfig.host}:${proxyConfig.port}`;
+        
+        // Create agent and add to config
+        if (proxyConfig.protocol === 'socks5') {
+          config.httpsAgent = new SocksProxyAgent(proxyUrl);
+          config.httpAgent = config.httpsAgent;
+        } else {
+          config.httpsAgent = new HttpsProxyAgent(proxyUrl);
+          config.httpAgent = config.httpsAgent;
+        }
+      } catch (error) {
+        console.error(chalk.red(`Error creating proxy URL: ${error instanceof Error ? error.message : String(error)}`));
+        
+        // Fallback to manual agent creation if URL encoding fails
+        if (proxyConfig.protocol === 'socks5') {
+          // Build the URL manually without using encodeURIComponent
+          const socksUrl = `socks5://${proxyConfig.username}:${proxyConfig.password}@${proxyConfig.host}:${proxyConfig.port}`;
+          config.httpsAgent = new SocksProxyAgent(socksUrl);
+        } else {
+          // Build the URL manually without using encodeURIComponent
+          const httpUrl = `${proxyConfig.protocol}://${proxyConfig.username}:${proxyConfig.password}@${proxyConfig.host}:${proxyConfig.port}`;
+          config.httpsAgent = new HttpsProxyAgent(httpUrl);
+        }
+        
+        config.httpAgent = config.httpsAgent;
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error in getAxiosConfig: ${error instanceof Error ? error.message : String(error)}`));
     }
     
     return config;
@@ -225,35 +260,48 @@ export class ProxyManager {
     const proxy = this.getCurrentProxy();
     if (!proxy) return null;
     
-    // Copy the proxy config so we don't modify the original
-    const proxyConfig: ProxyConfig = { ...proxy };
-    
-    // Add location or session parameters for Oxylabs
-    if (country || city || sessionId) {
-      // Check if the proxy is from Oxylabs
-      if (proxyConfig.host.includes('oxylabs')) {
-        let modifiedUsername = proxyConfig.username;
-        
-        // Add country if specified
-        if (country) {
-          modifiedUsername += `-cc-${country.toUpperCase()}`;
-        }
-        
-        // Add city if specified
-        if (city) {
-          modifiedUsername += `-city-${city.toLowerCase()}`;
-        }
-        
-        // Add session ID if specified
-        if (sessionId) {
-          modifiedUsername += `-sessid-${sessionId}`;
-        }
-        
-        proxyConfig.username = modifiedUsername;
+    try {
+      // Copy the proxy config so we don't modify the original
+      const proxyConfig: ProxyConfig = { ...proxy };
+      
+      // Focus on optimizing for Oxylabs - add parameters to username
+      let modifiedUsername = proxyConfig.username;
+          
+      // Add country if specified
+      if (country) {
+        modifiedUsername += `-cc-${country.toUpperCase()}`;
+      } else {
+        // Default to US if no country specified (most reliable for pump.fun)
+        modifiedUsername += `-cc-US`;
       }
+      
+      // Add city if specified
+      if (city) {
+        modifiedUsername += `-city-${city.toLowerCase()}`;
+      }
+      
+      // Add session ID if specified or generate a random one to avoid rate limiting
+      if (sessionId) {
+        // Use provided session ID
+        modifiedUsername += `-sessid-${sessionId}`;
+      } else {
+        // Generate random session ID to avoid reusing the same IP
+        const randomSessionId = Math.floor(Math.random() * 1000000).toString();
+        modifiedUsername += `-sessid-${randomSessionId}`;
+      }
+      
+      proxyConfig.username = modifiedUsername;
+      
+      // Ensure username and password are properly encoded
+      const encodedUsername = encodeURIComponent(proxyConfig.username);
+      const encodedPassword = encodeURIComponent(proxyConfig.password);
+      
+      // Return properly formatted URL string with encoding
+      return `${proxyConfig.protocol}://${encodedUsername}:${encodedPassword}@${proxyConfig.host}:${proxyConfig.port}`;
+    } catch (error) {
+      console.error(chalk.red(`Error in getProxyUrl: ${error instanceof Error ? error.message : String(error)}`));
+      return null;
     }
-    
-    return `${proxyConfig.protocol}://${proxyConfig.username}:${proxyConfig.password}@${proxyConfig.host}:${proxyConfig.port}`;
   }
   
   /**
@@ -268,29 +316,60 @@ export class ProxyManager {
       };
     }
     
-    const spinner = ora('Testing proxy connection...').start();
+    const spinner = ora('Testing Oxylabs proxy connection...').start();
     
     try {
-      const proxyConfig = this.getAxiosConfig();
-      const response = await axios.get('https://ip.oxylabs.io/location', proxyConfig);
+      // Generate a unique session ID for this test
+      const sessionId = `test-${Math.floor(Math.random() * 1000000)}`;
       
-      if (response.status === 200 && response.data) {
-        spinner.succeed(`Proxy connection successful: ${response.data.ip}`);
-        return { 
-          success: true, 
-          ip: response.data.ip, 
-          message: `Connected through ${response.data.country}` 
-        };
-      } else {
-        spinner.fail('Proxy connection failed: Unknown error');
+      // Get config with US country and test session ID
+      const proxyConfig = this.getAxiosConfig('US', undefined, sessionId);
+      
+      try {
+        const response = await axios.get('https://ip.oxylabs.io/location', proxyConfig);
+        
+        if (response.status === 200 && response.data) {
+          spinner.succeed(`Oxylabs proxy connection successful: ${response.data.ip}`);
+          return { 
+            success: true, 
+            ip: response.data.ip, 
+            message: `Connected through ${response.data.country}` 
+          };
+        } else {
+          spinner.fail('Proxy connection failed: Unknown error');
+          return { 
+            success: false, 
+            ip: null, 
+            message: 'Unknown error' 
+          };
+        }
+      } catch (error: any) {
+        // Try alternative lookup service if Oxylabs one fails
+        try {
+          spinner.text = 'Trying alternative IP lookup service...';
+          const altResponse = await axios.get('https://api.ipify.org?format=json', proxyConfig);
+          
+          if (altResponse.status === 200 && altResponse.data && altResponse.data.ip) {
+            spinner.succeed(`Proxy connection successful: ${altResponse.data.ip}`);
+            return { 
+              success: true, 
+              ip: altResponse.data.ip, 
+              message: `Connected successfully` 
+            };
+          }
+        } catch (altError) {
+          // Continue to the error handling below
+        }
+        
+        spinner.fail(`Proxy connection failed: ${error.message}`);
         return { 
           success: false, 
           ip: null, 
-          message: 'Unknown error' 
+          message: error.message 
         };
       }
     } catch (error: any) {
-      spinner.fail(`Proxy connection failed: ${error.message}`);
+      spinner.fail(`Error setting up proxy test: ${error.message}`);
       return { 
         success: false, 
         ip: null, 
@@ -302,11 +381,14 @@ export class ProxyManager {
   /**
    * Configure Oxylabs residential proxy
    */
-  public configureOxylabs(username: string, password: string): void {
+  public configureOxylabs(username: string, password: string, options?: { timeout?: number, retries?: number, sessionDuration?: number }): void {
+    // Ensure username doesn't already have customer- prefix
+    const cleanUsername = username.startsWith('customer-') ? username.substring(9) : username;
+    
     const oxyConfig: ProxyConfig = {
       host: 'pr.oxylabs.io',
       port: 7777,
-      username: `customer-${username}`,
+      username: `customer-${cleanUsername}`,
       password: password,
       protocol: 'http'
     };
@@ -396,6 +478,53 @@ export class ProxyManager {
     
     return fresh;
   }
+  
+  /**
+   * Get statistics about proxy usage for reporting
+   */
+  public getProxyStats(): Array<{url: string, successCount?: number, failureCount?: number, isBanned?: boolean, cooldownUntil?: number}> {
+    if (!this.isEnabled() || this.proxyConfigs.length === 0) {
+      return [];
+    }
+    
+    // For now we just return basic info about the configured proxies
+    return this.proxyConfigs.map(config => {
+      // Build a masked URL for display
+      const maskedUrl = `${config.protocol}://***:***@${config.host}:${config.port}`;
+      
+      return {
+        url: maskedUrl,
+        successCount: 0,
+        failureCount: 0,
+        isBanned: false
+      };
+    });
+  }
+}
+
+/**
+ * Generate natural-looking session parameters for proxy connections
+ * Randomizes session ID and duration to make connections appear more organic
+ */
+export function generateSessionParams(minDuration: number = 10, maxDuration: number = 30): {
+  sessionId: string;
+  sessionTime: number;
+  formattedString: string;
+} {
+  // Generate a random session ID
+  const sessionId = Math.floor(Math.random() * 1000000000).toString();
+  
+  // Random session time between min and max minutes for more natural behavior
+  const sessionTime = Math.floor(Math.random() * (maxDuration - minDuration + 1)) + minDuration;
+  
+  // Create formatted string for use in proxy connections
+  const formattedString = `-sessid-${sessionId}-sesstime-${sessionTime}`;
+  
+  return {
+    sessionId,
+    sessionTime,
+    formattedString
+  };
 }
 
 /**

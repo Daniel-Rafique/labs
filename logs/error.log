@@ -1,2 +1,4 @@
 2025-05-04T18:50:34.404Z ERROR: Token mint address is not defined. Check CONTRACT_ADDRESS env variable.
 2025-05-04T18:50:35.426Z ERROR: Token mint address is not defined. Check CONTRACT_ADDRESS env variable.
+2025-05-08T11:15:21.022Z ERROR: Token creation error Request failed with status code 404
+2025-05-08T12:23:09.832Z ERROR: Token creation error Logo file not found: ./img/logo/jpg

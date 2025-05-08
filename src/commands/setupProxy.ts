@@ -3,13 +3,15 @@ import * as path from 'path';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
-import { ProxyManager, getProxyManager } from '../utils/proxyManager';
+import { ProxyManager, getProxyManager, generateSessionParams } from '../utils/proxyManager';
 
 interface SetupProxyOptions {
   service?: string;
   username?: string;
   password?: string;
   test?: boolean;
+  timeout?: number;
+  retries?: number;
 }
 
 /**
@@ -20,6 +22,10 @@ export async function setupProxyCommand(options: SetupProxyOptions = {}): Promis
   
   try {
     const proxyManager = getProxyManager();
+    
+    // Set default timeout and retries if not provided
+    options.timeout = options.timeout || 30000; // 30 seconds default timeout
+    options.retries = options.retries || 3; // 3 retries by default
     
     // If no specific options provided, prompt for proxy service
     if (!options.service) {
@@ -40,6 +46,44 @@ export async function setupProxyCommand(options: SetupProxyOptions = {}): Promis
       options.service = serviceAnswer.service;
     }
     
+    // Prompt for advanced options if not headless
+    if (!options.username && !options.password) {
+      const advancedOptionsAnswer = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'configureAdvanced',
+          message: 'Would you like to configure advanced proxy settings?',
+          default: false
+        }
+      ]);
+      
+      if (advancedOptionsAnswer.configureAdvanced) {
+        const advancedOptions = await inquirer.prompt([
+          {
+            type: 'number',
+            name: 'timeout',
+            message: 'Connection timeout in milliseconds:',
+            default: options.timeout,
+            validate: (input: number) => {
+              return !isNaN(input) && input >= 5000 ? true : 'Timeout must be at least 5000ms (5 seconds)';
+            }
+          },
+          {
+            type: 'number',
+            name: 'retries',
+            message: 'Number of connection retries:',
+            default: options.retries,
+            validate: (input: number) => {
+              return !isNaN(input) && input >= 1 ? true : 'Must have at least 1 retry';
+            }
+          }
+        ]);
+        
+        options.timeout = advancedOptions.timeout;
+        options.retries = advancedOptions.retries;
+      }
+    }
+    
     // Handle different proxy services
     switch (options.service) {
       case 'oxylabs':
@@ -47,7 +91,7 @@ export async function setupProxyCommand(options: SetupProxyOptions = {}): Promis
         break;
         
       case 'manual':
-        await setupManualProxy(proxyManager);
+        await setupManualProxy(proxyManager, options);
         break;
         
       case 'disable':
@@ -61,7 +105,7 @@ export async function setupProxyCommand(options: SetupProxyOptions = {}): Promis
     
     // Test proxy connection if requested
     if (options.test || (await shouldTestConnection())) {
-      await testProxyConnection(proxyManager);
+      await testProxyConnection(proxyManager, options);
     }
     
     console.log(chalk.cyan('\n==== Proxy Setup Complete ===='));
@@ -109,15 +153,28 @@ async function setupOxylabs(proxyManager: ProxyManager, options: SetupProxyOptio
     throw new Error('Username and password are required for Oxylabs configuration');
   }
   
-  // Configure Oxylabs proxies
-  proxyManager.configureOxylabs(username, password);
+  // Generate natural-looking session parameters (10-30 minutes)
+  const sessionParams = generateSessionParams(10, 30);
+  
+  // Use enhanced username format with country code and randomized session parameters
+  const enhancedUsername = `${username}-cc-US${sessionParams.formattedString}`;
+  
+  // Configure Oxylabs proxies with enhanced username format and timeout settings
+  proxyManager.configureOxylabs(enhancedUsername, password, {
+    timeout: options.timeout || 30000, // 30 seconds default timeout
+    retries: options.retries || 3,     // 3 retries by default
+    sessionDuration: sessionParams.sessionTime * 60 // Convert minutes to seconds for our internal config
+  });
+  
   console.log(chalk.green('Oxylabs residential proxies configured successfully!'));
+  console.log(chalk.blue(`Connection timeout set to ${options.timeout || 30000}ms with ${options.retries || 3} retries`));
+  console.log(chalk.blue(`Using US proxy location with sticky session (${sessionParams.sessionTime} minutes)`));
 }
 
 /**
  * Setup manual proxy configuration
  */
-async function setupManualProxy(proxyManager: ProxyManager): Promise<void> {
+async function setupManualProxy(proxyManager: ProxyManager, options: SetupProxyOptions = {}): Promise<void> {
   console.log(chalk.cyan('\nManual Proxy Configuration'));
   
   const proxyAnswers = await inquirer.prompt([
@@ -162,12 +219,15 @@ async function setupManualProxy(proxyManager: ProxyManager): Promise<void> {
     port: proxyAnswers.port,
     username: proxyAnswers.username,
     password: proxyAnswers.password,
-    protocol: proxyAnswers.protocol as 'http' | 'https' | 'socks5'
+    protocol: proxyAnswers.protocol as 'http' | 'https' | 'socks5',
+    timeout: options.timeout || 30000,
+    retries: options.retries || 3
   };
   
   // Add the proxy configuration
   proxyManager.addProxy(proxyConfig);
   console.log(chalk.green('Manual proxy configuration added successfully!'));
+  console.log(chalk.blue(`Connection timeout set to ${options.timeout || 30000}ms with ${options.retries || 3} retries`));
 }
 
 /**
@@ -210,7 +270,7 @@ async function shouldTestConnection(): Promise<boolean> {
 /**
  * Test the proxy connection
  */
-async function testProxyConnection(proxyManager: ProxyManager): Promise<void> {
+async function testProxyConnection(proxyManager: ProxyManager, options: SetupProxyOptions = {}): Promise<void> {
   console.log(chalk.cyan('\nTesting proxy connection...'));
   
   if (!proxyManager.isEnabled()) {
@@ -220,9 +280,34 @@ async function testProxyConnection(proxyManager: ProxyManager): Promise<void> {
   
   const spinner = ora('Connecting through proxy...').start();
   
+  // Helper function to retry test
+  const retryTest = async (
+    testFn: () => Promise<any>,
+    maxRetries: number = options.retries || 3,
+    delay: number = 2000
+  ): Promise<any> => {
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await testFn();
+      } catch (error: any) {
+        lastError = error;
+        spinner.text = `Attempt ${attempt}/${maxRetries}: ${error.message}`;
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          // Increase delay for next retry
+          delay = Math.min(delay * 1.5, 10000);
+        }
+      }
+    }
+    
+    throw lastError;
+  };
+  
   try {
-    // Test the first connection
-    const result = await proxyManager.testProxy();
+    // Test the first connection with retries
+    const result = await retryTest(() => proxyManager.testProxy());
     
     if (result.success && result.ip) {
       spinner.succeed(`Connected successfully through IP: ${result.ip}`);
@@ -235,7 +320,7 @@ async function testProxyConnection(proxyManager: ProxyManager): Promise<void> {
       proxyManager.rotateProxy();
       
       // Test again with the new proxy
-      const result2 = await proxyManager.testProxy();
+      const result2 = await retryTest(() => proxyManager.testProxy());
       
       if (result2.success && result2.ip) {
         if (result2.ip !== result.ip) {
@@ -256,12 +341,42 @@ async function testProxyConnection(proxyManager: ProxyManager): Promise<void> {
       const countries = ['US', 'GB', 'DE', 'FR', 'JP'];
       const randomCountry = countries[Math.floor(Math.random() * countries.length)];
       
-      const countryTest = await testCountrySpecificProxy(proxyManager, randomCountry);
+      const countryTest = await testCountrySpecificProxy(proxyManager, randomCountry, options.timeout || 30000);
       
       if (countryTest.success) {
         spinner.succeed(countryTest.message);
       } else {
         spinner.warn(countryTest.message);
+      }
+      
+      // Test connection to pump.fun specifically
+      spinner.text = 'Testing connection to pump.fun API...';
+      spinner.start();
+      
+      try {
+        // Generate natural session parameters for pump.fun API test
+        const sessionParams = generateSessionParams(10, 30);
+        
+        // Use US location for pump.fun with randomized session parameters
+        const pumpFunConfig = proxyManager.getAxiosConfig('US', undefined, sessionParams.sessionId);
+        
+        spinner.text = `Testing pump.fun API with session: ${sessionParams.sessionId}, duration: ${sessionParams.sessionTime} min`;
+        
+        // Test connection to pump.fun API
+        const apiResponse = await fetch('https://frontend-api-v3.pump.fun/health', { 
+          // @ts-ignore
+          agent: pumpFunConfig.httpsAgent,
+          timeout: options.timeout || 30000
+        });
+        
+        if (apiResponse.ok) {
+          spinner.succeed('Successfully connected to pump.fun API');
+        } else {
+          spinner.warn(`Connected to pump.fun but received status ${apiResponse.status}`);
+        }
+      } catch (apiError: any) {
+        spinner.warn(`Could not connect to pump.fun API: ${apiError.message}`);
+        console.log(chalk.yellow('This may cause issues with profile creation and other API interactions'));
       }
       
     } else {
@@ -278,13 +393,22 @@ async function testProxyConnection(proxyManager: ProxyManager): Promise<void> {
  */
 async function testCountrySpecificProxy(
   proxyManager: ProxyManager, 
-  country: string
+  country: string,
+  timeout: number = 30000
 ): Promise<{success: boolean, message: string}> {
   try {
-    const config = proxyManager.getAxiosConfig(country);
+    // Generate natural session parameters (10-30 minutes)
+    const sessionParams = generateSessionParams(10, 30);
+    
+    // Get config with enhanced parameters
+    const config = proxyManager.getAxiosConfig(country, undefined, sessionParams.sessionId);
+    
+    console.log(chalk.blue(`Testing with country: ${country}, session: ${sessionParams.sessionId}, duration: ${sessionParams.sessionTime} minutes`));
+    
     const response = await fetch('https://ip.oxylabs.io/location', { 
       // @ts-ignore - the node-fetch types are a bit different
-      agent: config.httpsAgent
+      agent: config.httpsAgent,
+      timeout: timeout
     });
     
     if (!response.ok) {

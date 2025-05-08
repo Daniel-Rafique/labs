@@ -8,6 +8,7 @@ interface TokenCreationOptions {
     website?: string;
     initialBuys: number;
     creatorWalletIndex: number;
+    useProxy?: boolean;
 }
 interface TokenCreationResult {
     success: boolean;
@@ -15,7 +16,9 @@ interface TokenCreationResult {
     error?: string;
 }
 /**
- * Creates a token on Solana using pump.fun
+ * Create token on pump.fun
+ * @param options Token creation options
+ * @returns Result object with success status and mint address or error
  */
 export declare function createToken(options: TokenCreationOptions): Promise<TokenCreationResult>;
 export {};

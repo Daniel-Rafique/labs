@@ -40,6 +40,8 @@ const imageUpload_1 = require("../utils/imageUpload");
 // Import OpenAI SDK using v4 syntax
 const openai_1 = __importDefault(require("openai"));
 const dotenv = __importStar(require("dotenv"));
+// Import ProxyManager
+const proxyManager_1 = require("../utils/proxyManager");
 // Load environment variables
 dotenv.config();
 /**
@@ -164,7 +166,7 @@ async function generateAIBio(openaiKey) {
 async function createProfilesCommand(options) {
     try {
         // Get options interactively if not provided
-        let { path: walletPath, username, bio, withImage, useAi } = options;
+        let { path: walletPath, username, bio, withImage, useAi, useProxy } = options;
         if (!walletPath) {
             // Get project root directory
             const projectRootDir = path.resolve(__dirname, '../../');
@@ -181,6 +183,39 @@ async function createProfilesCommand(options) {
         if (!isConnected) {
             console.log(chalk_1.default.red('Cannot proceed without API connectivity.'));
             return;
+        }
+        // Check if proxy manager is available and configured
+        const proxyManager = (0, proxyManager_1.getProxyManager)();
+        const proxiesAvailable = proxyManager.isEnabled();
+        // Ask about using proxies if they're available and option not already provided
+        if (useProxy === undefined && proxiesAvailable) {
+            const proxyAnswer = await inquirer_1.default.prompt([
+                {
+                    type: 'confirm',
+                    name: 'useProxy',
+                    message: 'Use residential proxies for profile creation? (Recommended for large numbers of wallets)',
+                    default: true
+                }
+            ]);
+            useProxy = proxyAnswer.useProxy;
+        }
+        else if (useProxy === undefined) {
+            useProxy = false; // Default to false if no proxies available
+        }
+        if (useProxy && !proxiesAvailable) {
+            console.log(chalk_1.default.yellow('Proxies requested but none configured. Continuing without proxy.'));
+            useProxy = false;
+        }
+        if (useProxy && proxiesAvailable) {
+            console.log(chalk_1.default.green('✓ Using residential proxies for profile creation'));
+            // Test proxy connection
+            const testResult = await proxyManager.testProxy();
+            if (testResult.success) {
+                console.log(chalk_1.default.green(`Proxy connection successful: ${testResult.ip} (${testResult.message})`));
+            }
+            else {
+                console.log(chalk_1.default.yellow(`Proxy test failed: ${testResult.message}. Will retry during profile creation.`));
+            }
         }
         // Ask about using AI for profile data
         if (useAi === undefined) {
@@ -303,6 +338,7 @@ async function createProfilesCommand(options) {
             bio: bio || '',
             withImage: withImage || false,
             useAi: useAi || false,
+            useProxy: useProxy || false,
             openaiKey
         });
     }
@@ -349,6 +385,19 @@ async function createProfiles(wallets, options) {
     let failureCount = 0;
     const MAX_RETRIES = 3;
     const RETRY_DELAY = 3000; // 3 seconds between retries
+    // Set up proxy manager if needed
+    const proxyManager = (0, proxyManager_1.getProxyManager)();
+    const useProxy = options.useProxy && proxyManager.isEnabled();
+    // Map wallets to consistent proxy sessions
+    const walletSessions = new Map();
+    if (useProxy) {
+        // Generate random session IDs for each wallet
+        for (const wallet of wallets) {
+            // Use a shortened version of the public key as session ID for consistency
+            const sessionId = `profile-${wallet.publicKey.substring(0, 8)}`;
+            walletSessions.set(wallet.publicKey, sessionId);
+        }
+    }
     // Add random delay variation to appear more human
     function randomDelay(base) {
         return base + Math.floor(Math.random() * 2000); // Add 0-2 seconds randomly
@@ -357,9 +406,23 @@ async function createProfiles(wallets, options) {
         const wallet = wallets[i];
         spinner.text = `Creating profile for wallet ${i + 1}/${wallets.length}: ${wallet.publicKey.substring(0, 8)}...`;
         try {
-            // First authenticate the wallet with pump.fun
+            // Use consistent session ID for this wallet if using proxies
+            const sessionId = walletSessions.get(wallet.publicKey);
+            // If using proxies, ensure we have a fresh IP
+            if (useProxy) {
+                spinner.text = `Ensuring fresh proxy IP for wallet ${i + 1}/${wallets.length}...`;
+                // Use wallet public key for consistent IP assignment
+                const freshIp = await proxyManager.ensureFreshIp(wallet.publicKey.substring(0, 8));
+                if (freshIp) {
+                    spinner.text = `Using fresh proxy IP for wallet ${i + 1}/${wallets.length}...`;
+                }
+                else {
+                    spinner.text = `Could not get fresh proxy IP, continuing anyway...`;
+                }
+            }
+            // First authenticate the wallet with pump.fun using proxy if enabled
             spinner.text = `Authenticating wallet ${i + 1}/${wallets.length}...`;
-            const authResult = await (0, PumpFunWrapper_1.enhancedAuthenticate)(wallet);
+            const authResult = await (0, PumpFunWrapper_1.enhancedAuthenticate)(wallet, useProxy ? { useProxy, sessionId } : undefined);
             if (!authResult) {
                 failureCount++;
                 console.error(chalk_1.default.red(`\nFailed to authenticate wallet ${wallet.publicKey.substring(0, 8)}`));
@@ -370,7 +433,7 @@ async function createProfiles(wallets, options) {
             if (options.withImage) {
                 spinner.text = `Uploading profile image for wallet ${i + 1}/${wallets.length}...`;
                 try {
-                    profileImageUrl = await (0, imageUpload_1.uploadImage)(authResult.authToken);
+                    profileImageUrl = await (0, imageUpload_1.uploadImage)(authResult.authToken, useProxy, sessionId);
                     if (!profileImageUrl) {
                         console.log(chalk_1.default.yellow(`No image found or upload failed for wallet ${wallet.publicKey.substring(0, 8)}. Continuing without image.`));
                     }
@@ -447,8 +510,8 @@ async function createProfiles(wallets, options) {
                         // Add increasing delay between retries
                         await (0, transaction_1.sleep)(RETRY_DELAY * Math.pow(2, attempt - 1));
                     }
-                    // Create axios instance with proper headers and longer timeout
-                    const client = axios_1.default.create({
+                    // Create axios instance with proper headers, proxy if enabled
+                    let clientConfig = {
                         headers: {
                             "Content-Type": "application/json",
                             "Accept": "*/*",
@@ -458,7 +521,18 @@ async function createProfiles(wallets, options) {
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
                         },
                         timeout: 30000 // 30 second timeout
-                    });
+                    };
+                    // Add proxy configuration if enabled
+                    if (useProxy) {
+                        // Get random country for geo-distribution (optional)
+                        const countries = ['US', 'CA', 'GB', 'DE', 'FR', 'AU'];
+                        const randomCountry = countries[Math.floor(Math.random() * countries.length)];
+                        // Apply proxy configuration to axios
+                        const proxyConfig = proxyManager.getAxiosConfig(randomCountry, undefined, sessionId);
+                        clientConfig = { ...clientConfig, ...proxyConfig };
+                        spinner.text = `Creating profile through proxy (${randomCountry})...`;
+                    }
+                    const client = axios_1.default.create(clientConfig);
                     // Try different endpoints if available
                     const endpoints = [
                         'https://frontend-api-v3.pump.fun/users',
@@ -473,7 +547,7 @@ async function createProfiles(wallets, options) {
                         spinner.text = `Verifying profile creation for ${wallet.publicKey.substring(0, 8)}...`;
                         // Wait a moment for the profile to be fully processed
                         await (0, transaction_1.sleep)(2000);
-                        const verified = await verifyProfileCreation(authResult.authToken, wallet.publicKey);
+                        const verified = await verifyProfileCreation(authResult.authToken, wallet.publicKey, useProxy, sessionId);
                         if (verified) {
                             successCount++;
                             spinner.succeed(`Created and verified profile for wallet ${wallet.publicKey.substring(0, 8)} with username "${username}"`);
@@ -493,6 +567,19 @@ async function createProfiles(wallets, options) {
                 }
                 catch (error) {
                     lastError = error;
+                    // If proxy error, try rotating the proxy
+                    const proxyError = error.message && (error.message.includes('proxy') ||
+                        error.message.includes('ECONNRESET') ||
+                        error.message.includes('timeout') ||
+                        error.code === 'ECONNABORTED');
+                    if (useProxy && proxyError) {
+                        console.log(chalk_1.default.yellow(`\nProxy connection issue: ${error.message}. Rotating proxy...`));
+                        proxyManager.rotateProxy();
+                        // Don't count proxy errors as retry attempts
+                        attempt--;
+                        await (0, transaction_1.sleep)(2000);
+                        continue;
+                    }
                     const socketHangup = error.message && error.message.includes('socket hang up');
                     const timeout = error.message && (error.message.includes('timeout') || error.code === 'ECONNABORTED');
                     const connectionReset = error.message && (error.message.includes('ECONNRESET') || error.code === 'ECONNRESET');
@@ -582,12 +669,14 @@ async function createProfiles(wallets, options) {
  * Verify a profile was created successfully by fetching it from the API
  * @param authToken Authentication token
  * @param publicKey Wallet public key
+ * @param useProxy Whether to use proxy for verification
+ * @param sessionId Optional session ID for consistent proxy usage
  * @returns True if profile exists with proper data
  */
-async function verifyProfileCreation(authToken, publicKey) {
+async function verifyProfileCreation(authToken, publicKey, useProxy = false, sessionId) {
     try {
-        // Create axios instance with authentication
-        const client = axios_1.default.create({
+        // Set up client config with authentication headers
+        let clientConfig = {
             headers: {
                 "Accept": "*/*",
                 "Origin": "https://pump.fun",
@@ -596,7 +685,19 @@ async function verifyProfileCreation(authToken, publicKey) {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
             },
             timeout: 15000
-        });
+        };
+        // Add proxy configuration if enabled
+        if (useProxy) {
+            // Get proxy manager
+            const proxyManager = (0, proxyManager_1.getProxyManager)();
+            if (proxyManager.isEnabled()) {
+                // Get proxy configuration, using the same session ID for consistent IP
+                const proxyConfig = proxyManager.getAxiosConfig(undefined, undefined, sessionId);
+                clientConfig = { ...clientConfig, ...proxyConfig };
+            }
+        }
+        // Create client with config
+        const client = axios_1.default.create(clientConfig);
         // The profile endpoint returns user info including profiles
         const response = await client.get(`https://frontend-api-v3.pump.fun/users/${publicKey}`);
         // Check if we got a valid response with profile data
@@ -617,13 +718,30 @@ async function verifyProfileCreation(authToken, publicKey) {
 async function checkApiConnectivity() {
     try {
         console.log(chalk_1.default.cyan('Checking connection to pump.fun API...'));
-        // Create a simple axios client
-        const client = axios_1.default.create({
+        // Get proxy manager to use in connection test
+        const proxyManager = (0, proxyManager_1.getProxyManager)();
+        // Create a simple axios client, with proxy if available and enabled
+        let clientConfig = {
             timeout: 10000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
             }
-        });
+        };
+        // Only use proxy if manager is enabled
+        if (proxyManager.isEnabled()) {
+            // Test if proxy works first
+            const testResult = await proxyManager.testProxy();
+            if (testResult.success) {
+                console.log(chalk_1.default.green(`Using proxy for API connectivity test: ${testResult.ip}`));
+                // Apply proxy configuration
+                const proxyConfig = proxyManager.getAxiosConfig();
+                clientConfig = { ...clientConfig, ...proxyConfig };
+            }
+            else {
+                console.log(chalk_1.default.yellow(`Proxy test failed, using direct connection for API check: ${testResult.message}`));
+            }
+        }
+        const client = axios_1.default.create(clientConfig);
         // Test the main API endpoint
         const pingEndpoints = [
             'https://frontend-api-v3.pump.fun/health',

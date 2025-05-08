@@ -66,7 +66,12 @@ export async function postComment(
   proxy?: ProxyConfig | string,
   options: CommentPostingOptions = {}
 ): Promise<CommentPostResult> {
-  console.log(chalk.cyan(`Posting comment via pump.fun API...`));
+  // Log whether we're using a proxy
+  if (proxy) {
+    console.log(chalk.cyan(`Posting comment via pump.fun API using proxy...`));
+  } else {
+    console.log(chalk.cyan(`Posting comment via pump.fun API without proxy...`));
+  }
   
   // Default options
   const {
@@ -524,11 +529,11 @@ async function postCommentWithRetries(
 
 /**
  * Check if comments are enabled for a token
- * @param tokenMint Token mint address
+ * @param tokenMint The token mint address to check
  * @param proxy Optional proxy to use
- * @param awsToken Optional AWS token for authenticated check
- * @param authToken Optional auth token for authenticated check
- * @returns True if comments are enabled
+ * @param awsToken Optional AWS token for authentication
+ * @param authToken Optional auth token for authentication
+ * @returns True if comments are enabled, false otherwise
  */
 export async function checkCommentsEnabled(
   tokenMint: string,
@@ -537,6 +542,14 @@ export async function checkCommentsEnabled(
   authToken?: string
 ): Promise<boolean> {
   try {
+    // Log whether we're using a proxy for this check
+    if (proxy) {
+      console.log(chalk.cyan(`Checking if comments are enabled for ${tokenMint} using proxy...`));
+    } else {
+      console.log(chalk.cyan(`Checking if comments are enabled for ${tokenMint} without proxy...`));
+    }
+    
+    // Create Axios client with proxy if provided
     const client = createAxiosInstance(proxy);
     const headers: Record<string, string> = getBrowserLikeHeaders();
     

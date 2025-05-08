@@ -12,6 +12,7 @@ const inquirer_1 = __importDefault(require("inquirer"));
 const wallet_1 = require("../utils/wallet");
 const createToken_1 = require("../utils/createToken");
 const logger_1 = __importDefault(require("../utils/logger"));
+const proxyManager_1 = require("../utils/proxyManager");
 async function createTokenCommand(options) {
     try {
         console.log(chalk_1.default.blue('=== LABS Token Creator ==='));
@@ -30,6 +31,51 @@ async function createTokenCommand(options) {
             console.error(chalk_1.default.red('You need at least 2 wallets to create a token (1 creator + 1 buyer)'));
             console.log(chalk_1.default.yellow('Use the createWallets command to create more wallets'));
             return;
+        }
+        // Check for proxy configuration
+        const proxyManager = (0, proxyManager_1.getProxyManager)();
+        const proxyEnabled = proxyManager.isEnabled();
+        // If proxy support wasn't specified in options, ask user if proxy is available
+        if (options.useProxy === undefined && proxyEnabled) {
+            const proxyAnswer = await inquirer_1.default.prompt([
+                {
+                    type: 'confirm',
+                    name: 'useProxy',
+                    message: 'Do you want to use residential proxies for token creation?',
+                    default: true
+                }
+            ]);
+            options.useProxy = proxyAnswer.useProxy;
+            if (options.useProxy) {
+                console.log(chalk_1.default.green('Proxy support is enabled for token creation'));
+                // Test proxy connection
+                const testResult = await proxyManager.testProxy();
+                if (testResult.success) {
+                    console.log(chalk_1.default.green(`✓ Proxy test successful: ${testResult.ip}`));
+                }
+                else {
+                    console.log(chalk_1.default.yellow(`⚠️ Proxy test failed: ${testResult.message}`));
+                    // Ask if they want to continue without proxy
+                    const continueAnswer = await inquirer_1.default.prompt([
+                        {
+                            type: 'confirm',
+                            name: 'continueWithoutProxy',
+                            message: 'Proxy test failed. Do you want to continue without proxy?',
+                            default: true
+                        }
+                    ]);
+                    if (continueAnswer.continueWithoutProxy) {
+                        options.useProxy = false;
+                    }
+                    else {
+                        return; // Exit if they don't want to continue
+                    }
+                }
+            }
+        }
+        else if (options.useProxy === true && !proxyEnabled) {
+            console.log(chalk_1.default.yellow('Proxy support was requested but no proxies are configured. Continuing without proxy.'));
+            options.useProxy = false;
         }
         // Gather required information
         const questions = [];
@@ -138,7 +184,8 @@ async function createTokenCommand(options) {
             telegram: options.telegram || answers.telegram,
             website: options.website || answers.website,
             initialBuys: parseInt(options.buys || answers.buys),
-            creatorWalletIndex: answers.creatorWalletIndex
+            creatorWalletIndex: answers.creatorWalletIndex,
+            useProxy: options.useProxy
         };
         // Confirm with the user
         console.log(chalk_1.default.cyan('\nToken Creation Summary:'));
@@ -151,6 +198,7 @@ async function createTokenCommand(options) {
         console.log(chalk_1.default.white(`Website: ${createTokenOptions.website || 'None'}`));
         console.log(chalk_1.default.white(`Initial Buys: ${createTokenOptions.initialBuys}`));
         console.log(chalk_1.default.white(`Creator Wallet: ${wallets[createTokenOptions.creatorWalletIndex].publicKey}`));
+        console.log(chalk_1.default.white(`Use Proxies: ${createTokenOptions.useProxy ? 'Yes' : 'No'}`));
         const { confirmCreate } = await inquirer_1.default.prompt([
             {
                 type: 'confirm',

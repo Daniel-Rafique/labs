@@ -72,7 +72,11 @@ export declare class ProxyManager {
     /**
      * Configure Oxylabs residential proxy
      */
-    configureOxylabs(username: string, password: string): void;
+    configureOxylabs(username: string, password: string, options?: {
+        timeout?: number;
+        retries?: number;
+        sessionDuration?: number;
+    }): void;
     /**
      * Check if current IP has been used recently
      * Returns true if IP is considered "fresh" (not used recently)

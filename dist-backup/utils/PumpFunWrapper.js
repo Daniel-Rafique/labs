@@ -277,14 +277,120 @@ async function directPumpSignIn(wallet, proxy) {
 /**
  * Wrapper for authenticating with PumpFun
  * @param wallet Wallet data in the old format
- * @param proxy Ignored - always uses direct connection
+ * @param proxy Proxy options including useProxy flag and sessionId
  * @returns Authentication result if successful, null otherwise
  */
 async function enhancedAuthenticate(wallet, proxy) {
     try {
         console.log(chalk_1.default.cyan(`Authenticating wallet ${wallet.publicKey.substring(0, 8)}...`));
-        // Always use direct connection
-        console.log(chalk_1.default.cyan('Using direct connection for authentication'));
+        // Check if we should use proxy for this authentication
+        const shouldUseProxy = proxy && proxy.useProxy === true;
+        const sessionId = proxy && proxy.sessionId;
+        if (shouldUseProxy) {
+            // Import ProxyManager if needed - using dynamic import to avoid circular dependencies
+            const { getProxyManager } = await Promise.resolve().then(() => __importStar(require('./proxyManager')));
+            const proxyManager = getProxyManager();
+            if (proxyManager.isEnabled()) {
+                console.log(chalk_1.default.cyan(`Using proxy for authentication ${sessionId ? `(session: ${sessionId})` : ''}`));
+                // Get proxy configuration for axios
+                const proxyConfig = proxyManager.getAxiosConfig(undefined, undefined, sessionId);
+                try {
+                    // Use direct implementation with proxy configuration
+                    const client = (0, PumpFunAuth_1.createAxiosInstance)();
+                    // Apply proxy config to the existing client
+                    if (proxyConfig.httpsAgent) {
+                        client.defaults.httpsAgent = proxyConfig.httpsAgent;
+                    }
+                    const secretKey = typeof wallet.secretKey === 'string' ? bs58.decode(wallet.secretKey) : wallet.secretKey;
+                    const authPayload = await (0, AuthSignature_1.createAuthPayload)(wallet.publicKey, secretKey);
+                    // Try proxy authentication first with the frontend API
+                    try {
+                        const proxyResponse = await client.post(`${PUMP_FUN_BASE_URL}/auth/login`, authPayload, {
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Accept": "*/*",
+                                "Origin": "https://pump.fun",
+                                "Referer": "https://pump.fun/",
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                            },
+                            timeout: 20000
+                        });
+                        // Extract cookies from response headers
+                        const cookieHeader = proxyResponse.headers['set-cookie'];
+                        if (!cookieHeader) {
+                            console.log(chalk_1.default.yellow("No cookies in response headers"));
+                            // Fall back to non-proxy auth
+                            return await enhancedAuthenticate(wallet, { useProxy: false });
+                        }
+                        // Parse cookies
+                        const cookies = {};
+                        (Array.isArray(cookieHeader) ? cookieHeader : [cookieHeader]).forEach(cookieString => {
+                            const cookieParts = cookieString.split(';')[0].split('=');
+                            if (cookieParts.length >= 2) {
+                                const name = cookieParts[0].trim();
+                                const value = cookieParts.slice(1).join('=').trim();
+                                cookies[name] = value;
+                            }
+                        });
+                        if (!cookies.auth_token) {
+                            console.log(chalk_1.default.yellow("No auth_token cookie found in response"));
+                            // Fall back to non-proxy auth
+                            return await enhancedAuthenticate(wallet, { useProxy: false });
+                        }
+                        console.log(chalk_1.default.green(`Proxy authentication successful for ${wallet.publicKey.substring(0, 8)}`));
+                        // Try to get AWS token using the same proxy
+                        try {
+                            const cookieString = Object.entries(cookies)
+                                .map(([name, value]) => `${name}=${value}`)
+                                .join('; ');
+                            const awsResponse = await client.get(`${PUMP_FUN_BASE_URL}/token/generateTokenForThread?user=${wallet.publicKey}`, {
+                                headers: {
+                                    "Content-Type": "application/json",
+                                    "Accept": "*/*",
+                                    "Cookie": cookieString,
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                                },
+                                timeout: 15000
+                            });
+                            if (awsResponse.data && awsResponse.data.token) {
+                                return {
+                                    authToken: cookies.auth_token,
+                                    awsToken: awsResponse.data.token,
+                                    userPublicKey: wallet.publicKey
+                                };
+                            }
+                        }
+                        catch (awsError) {
+                            // Return without AWS token if we couldn't get it
+                            return {
+                                authToken: cookies.auth_token,
+                                awsToken: '',
+                                userPublicKey: wallet.publicKey
+                            };
+                        }
+                        // Return auth result with empty AWS token if we couldn't get it above
+                        return {
+                            authToken: cookies.auth_token,
+                            awsToken: '',
+                            userPublicKey: wallet.publicKey
+                        };
+                    }
+                    catch (proxyAuthError) {
+                        console.log(chalk_1.default.yellow(`Proxy authentication failed, trying fallback methods: ${proxyAuthError.message}`));
+                        // Try regular authentication as fallback
+                    }
+                }
+                catch (e) {
+                    console.log(chalk_1.default.yellow(`Error setting up proxy authentication: ${e.message}`));
+                }
+            }
+            else {
+                console.log(chalk_1.default.yellow(`Proxy was requested but proxy manager is not enabled. Using direct connection.`));
+            }
+        }
+        else {
+            console.log(chalk_1.default.cyan('Using direct connection for authentication'));
+        }
         // First try the direct implementation that follows the reference code
         try {
             const directResult = await directPumpSignIn(wallet, undefined);

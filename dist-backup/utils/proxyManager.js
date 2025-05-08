@@ -285,7 +285,7 @@ class ProxyManager {
     /**
      * Configure Oxylabs residential proxy
      */
-    configureOxylabs(username, password) {
+    configureOxylabs(username, password, options) {
         const oxyConfig = {
             host: 'pr.oxylabs.io',
             port: 7777,

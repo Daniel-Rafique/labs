@@ -32,7 +32,7 @@ export declare function enhancedCheckCommentsEnabled(tokenMint: string, proxy?: 
 /**
  * Wrapper for authenticating with PumpFun
  * @param wallet Wallet data in the old format
- * @param proxy Ignored - always uses direct connection
+ * @param proxy Proxy options including useProxy flag and sessionId
  * @returns Authentication result if successful, null otherwise
  */
 export declare function enhancedAuthenticate(wallet: WalletData, proxy?: any): Promise<PumpFunAuthResult | null>;

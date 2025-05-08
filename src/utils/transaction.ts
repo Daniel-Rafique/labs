@@ -1,5 +1,6 @@
-import { Connection, Keypair, Transaction, sendAndConfirmTransaction, SendOptions, ComputeBudgetProgram, PublicKey, LAMPORTS_PER_SOL, SystemProgram } from '@solana/web3.js';
+import { Connection, Keypair, Transaction, sendAndConfirmTransaction, SendOptions, ComputeBudgetProgram, PublicKey, LAMPORTS_PER_SOL, SystemProgram, SYSVAR_RECENT_BLOCKHASHES_PUBKEY } from '@solana/web3.js';
 import { getOrCreateAssociatedTokenAccount, createTransferInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, createCloseAccountInstruction } from '../lib/solana/token-compat';
+import { AccountLayout } from '@solana/spl-token';
 import * as bs58 from 'bs58';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
@@ -244,6 +245,12 @@ export async function transferSplToken(
   tokenMint: PublicKey,
   amount: number
 ): Promise<string> {
+  // Validate the token mint first
+  const isValidMint = await isValidTokenMint(connection, tokenMint);
+  if (!isValidMint) {
+    throw new Error(`Invalid token mint: ${tokenMint.toString()}`);
+  }
+  
   // Get or create associated token accounts
   const fromTokenAccount = await getOrCreateAssociatedTokenAccount(
     connection,
@@ -297,20 +304,31 @@ export async function getAccountTokens(
         { programId }
       );
       
-      for (const { pubkey } of tokenAccounts.value) {
+      for (const { pubkey, account } of tokenAccounts.value) {
         try {
           // Get the token account balance
           const accountInfo = await connection.getTokenAccountBalance(pubkey);
           
           if (accountInfo && Number(accountInfo.value.amount) > 0) {
+            // Parse the token account data to get the mint address
+            const accountData = AccountLayout.decode(account.data);
+            const mintAddress = new PublicKey(accountData.mint);
+            
+            // Validate the mint is still valid
+            const isValidMint = await isValidTokenMint(connection, mintAddress);
+            if (!isValidMint) {
+              console.log(`Skipping invalid mint: ${mintAddress.toString()}`);
+              continue;
+            }
+            
             tokens.push({
-              mint: pubkey.toString(), // We don't have the mint address, just use the token account address
+              mint: mintAddress.toString(),
               amount: Number(accountInfo.value.amount),
               decimals: accountInfo.value.decimals
             });
           }
         } catch (error) {
-          console.error(`Error getting token account info: ${error}`);
+          console.error(`Error getting token account info for ${pubkey.toString()}: ${error}`);
         }
       }
     } catch (error) {
@@ -319,6 +337,46 @@ export async function getAccountTokens(
   }
   
   return tokens;
+}
+
+/**
+ * Check if a token mint is valid and exists on-chain
+ * @param connection - Solana connection
+ * @param tokenMint - Token mint public key to check
+ * @returns True if the mint is valid, false otherwise
+ */
+export async function isValidTokenMint(
+  connection: Connection,
+  tokenMint: PublicKey
+): Promise<boolean> {
+  try {
+    // Try to get the mint info - this will throw an error if the mint doesn't exist
+    const mintInfo = await connection.getAccountInfo(tokenMint);
+    
+    // If null or doesn't exist, it's not a valid mint
+    if (!mintInfo) {
+      return false;
+    }
+    
+    // Check if it's owned by the Token Program (either legacy or Token-2022)
+    if (
+      !mintInfo.owner.equals(TOKEN_PROGRAM_ID) && 
+      !mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+    ) {
+      return false;
+    }
+    
+    // Check minimum data length for a mint account
+    // A token mint account should have a minimum data length
+    if (mintInfo.data.length < 82) {
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.log(`Error validating token mint ${tokenMint.toString()}: ${error}`);
+    return false;
+  }
 }
 
 /**
@@ -783,6 +841,15 @@ export async function bundleTokenTransfersFromSubwallets(
         const amount = batchAmounts[i];
         
         try {
+          // First validate the token mint before proceeding
+          const isValidMint = await isValidTokenMint(connection, tokenMint);
+          if (!isValidMint) {
+            const errorMsg = `Invalid token mint: ${tokenMint.toString()}`;
+            console.error(errorMsg);
+            errors.push(errorMsg);
+            continue;
+          }
+          
           // Get source token account
           const sourceTokenAccount = await getOrCreateAssociatedTokenAccount(
             connection,
