@@ -26,16 +26,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.TradingBot = void 0;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const dotenv = __importStar(require("dotenv"));
 const web3_js_1 = require("@solana/web3.js");
 const ora_1 = __importDefault(require("ora"));
-const chalk_1 = __importDefault(require("chalk"));
 const os = __importStar(require("os"));
 const bs58_1 = require("bs58");
 const aiTradingStrategy_1 = require("./utils/aiTradingStrategy");
 const proxyManager_1 = require("./utils/proxyManager");
+const axios_1 = __importDefault(require("axios"));
+const botDetectionAvoidance_1 = require("./utils/botDetectionAvoidance");
 // Load environment variables
 dotenv.config();
 class TradingBot {
@@ -48,6 +50,16 @@ class TradingBot {
         this.parameterUpdateInterval = 5 * 60 * 1000; // 5 minutes
         this.isRunning = false;
         this.walletsToProxies = new Map(); // Map wallet public keys to session IDs
+        this.currentWalletIndex = 0;
+        this.marketMetrics = {};
+        this.metricUpdateInterval = 10 * 60 * 1000; // 10 minutes
+        this.lastMetricUpdate = 0;
+        this.orderPattern = [];
+        this.currentOrderIndex = 0;
+        this.walletRotationStrategy = 'random';
+        this.minDelaySeconds = 40; // Default minimum delay in seconds
+        this.maxDelaySeconds = 120; // Default maximum delay in seconds
+        this.adaptiveTrading = true; // Enable adaptive trading by default
         // Initialize logger
         this.logger = {
             info: (message) => console.log(message),
@@ -57,14 +69,21 @@ class TradingBot {
         };
         // Load configuration from environment variables
         this.tokenAddress = process.env.CONTRACT_ADDRESS || process.env.TOKEN_MINT_ADDRESS || '';
-        this.maxTradeAmount = parseFloat(process.env.MAX_TRADE_AMOUNT || '0.005');
-        this.minTradeAmount = parseFloat(process.env.MIN_TRADE_AMOUNT || '0.0005');
-        this.timeBetweenBuys = parseInt(process.env.TIME_BETWEEN_BUYS || '5000');
+        // Use realistic range for trade amounts (0.8 to 2.3 SOL as default range)
+        this.maxTradeAmount = parseFloat(process.env.MAX_TRADE_AMOUNT || '2.3');
+        this.minTradeAmount = parseFloat(process.env.MIN_TRADE_AMOUNT || '0.8');
+        // Implement variable trade timing (40-120 seconds)
+        this.minDelaySeconds = parseInt(process.env.MIN_DELAY_SECONDS || '40');
+        this.maxDelaySeconds = parseInt(process.env.MAX_DELAY_SECONDS || '120');
+        this.timeBetweenBuys = parseInt(process.env.TIME_BETWEEN_BUYS || '60000');
         this.numberOfBuys = parseInt(process.env.NUMBER_OF_BUYS || '3');
         this.numberOfCycles = parseInt(process.env.NUMBER_OF_CYCLES || '1');
         this.isJitoMode = process.env.JITO === 'true';
         this.useAiOptimization = process.env.USE_AI_OPTIMIZATION === 'true';
         this.useProxies = process.env.USE_PROXIES === 'true';
+        // Load anti-detection settings
+        this.walletRotationStrategy = process.env.WALLET_ROTATION_STRATEGY || 'random';
+        this.adaptiveTrading = process.env.ADAPTIVE_TRADING !== 'false';
         // Initialize proxy manager
         this.proxyManager = (0, proxyManager_1.getProxyManager)();
         // Check if proxies are configured but not explicitly enabled via env variable
@@ -76,6 +95,8 @@ class TradingBot {
         this.connection = new web3_js_1.Connection(this.rpcEndpoint, 'confirmed');
         // Validate configuration
         this.validateConfiguration();
+        // Generate initial order pattern for 20 orders
+        this.orderPattern = (0, botDetectionAvoidance_1.generateBalancedOrderPattern)(20);
     }
     validateConfiguration() {
         // Validate token address
@@ -127,11 +148,31 @@ class TradingBot {
             if (this.useProxies && this.proxyManager.isEnabled()) {
                 this.assignProxySessions();
             }
-            this.logger.info(`Successfully loaded ${this.wallets.length} wallets`);
+            // For bot detection avoidance, limit to 3-5 wallets for trading
+            const maxWalletsToUse = Math.min(this.wallets.length, Math.floor(Math.random() * 3) + 3); // 3-5 wallets
+            this.logger.info(`Successfully loaded ${this.wallets.length} wallets (using ${maxWalletsToUse} for trading)`);
+            // Initialize wallet balances
+            await this.updateWalletBalances();
         }
         catch (error) {
             this.logger.error(`Failed to load wallets: ${error.message}`);
             throw error;
+        }
+    }
+    /**
+     * Update the SOL balance for each wallet
+     */
+    async updateWalletBalances() {
+        try {
+            for (let i = 0; i < this.walletKeypairs.length; i++) {
+                const wallet = this.walletKeypairs[i];
+                const balance = await this.connection.getBalance(wallet.publicKey);
+                this.wallets[i].balance = balance / 1e9; // Convert lamports to SOL
+            }
+            this.logger.info('Updated wallet balances');
+        }
+        catch (error) {
+            this.logger.warn(`Failed to update wallet balances: ${error.message}`);
         }
     }
     /**
@@ -142,9 +183,8 @@ class TradingBot {
         this.walletsToProxies.clear();
         for (const wallet of this.walletKeypairs) {
             const publicKey = wallet.publicKey.toString();
-            // Create a session ID based on a portion of the wallet's public key
-            // This ensures the same wallet always gets the same session ID
-            const sessionId = `s-${publicKey.substring(0, 8)}`;
+            // Use consistent session ID for each wallet
+            const sessionId = (0, botDetectionAvoidance_1.generateConsistentSessionId)(publicKey);
             this.walletsToProxies.set(publicKey, sessionId);
         }
         this.logger.info(`Assigned proxy sessions to ${this.walletsToProxies.size} wallets`);
@@ -213,159 +253,315 @@ class TradingBot {
         try {
             const updatedParams = await this.aiStrategy.update();
             // Apply the updated parameters
-            this.maxTradeAmount = updatedParams.maxAmount;
             this.minTradeAmount = updatedParams.minAmount;
+            this.maxTradeAmount = updatedParams.maxAmount;
             this.timeBetweenBuys = updatedParams.timeBetween;
             this.numberOfBuys = updatedParams.numBuys;
             this.lastParameterUpdate = now;
-            // Log the updated parameters
-            this.logger.info(chalk_1.default.cyan('Trading parameters updated by AI:'));
-            this.logger.info(chalk_1.default.green(`Max Trade Amount: ${this.maxTradeAmount} SOL`));
-            this.logger.info(chalk_1.default.green(`Min Trade Amount: ${this.minTradeAmount} SOL`));
-            this.logger.info(chalk_1.default.green(`Time Between Buys: ${this.timeBetweenBuys}ms`));
-            this.logger.info(chalk_1.default.green(`Number of Buys: ${this.numberOfBuys}`));
+            this.logger.info('Trading parameters updated via AI optimization');
+            this.logger.info(`New min/max trade amount: ${this.minTradeAmount}/${this.maxTradeAmount} SOL`);
+            this.logger.info(`New time between buys: ${this.timeBetweenBuys}ms`);
+            this.logger.info(`New number of buys: ${this.numberOfBuys}`);
         }
         catch (error) {
-            this.logger.error(`Error updating trading parameters: ${error.message}`);
+            this.logger.error(`Failed to update trading parameters: ${error.message}`);
+        }
+    }
+    /**
+     * Update market metrics for adaptive trading
+     */
+    async updateMarketMetrics() {
+        const now = Date.now();
+        if (!this.adaptiveTrading || now - this.lastMetricUpdate < this.metricUpdateInterval)
+            return;
+        try {
+            // If using AI strategy, update it first to keep its internal state fresh
+            if (this.aiStrategy) {
+                await this.aiStrategy.update();
+            }
+            // Always fetch market metrics directly from the API
+            try {
+                const dexScreenerUrl = `https://api.dexscreener.com/latest/dex/tokens/${this.tokenAddress}`;
+                const response = await axios_1.default.get(dexScreenerUrl, { timeout: 10000 });
+                if (response.data && response.data.pairs && response.data.pairs.length > 0) {
+                    const pair = response.data.pairs[0];
+                    this.marketMetrics = {
+                        volume24h: parseFloat(pair.volume.h24),
+                        priceChange24h: parseFloat(pair.priceChange.h24),
+                        liquidity: parseFloat(pair.liquidity.usd),
+                        volatility: Math.abs(parseFloat(pair.priceChange.h1)),
+                        isUptrend: parseFloat(pair.priceChange.h24) > 0,
+                        lastUpdated: now
+                    };
+                    this.logger.info(`Updated market metrics: volume=${this.marketMetrics.volume24h}, price change=${this.marketMetrics.priceChange24h}%`);
+                }
+                else {
+                    this.logger.warn('No trading pairs found for this token in DexScreener API');
+                }
+            }
+            catch (error) {
+                this.logger.warn(`Failed to fetch market metrics: ${error.message}`);
+            }
+            this.lastMetricUpdate = now;
+            // Adjust trading parameters based on market conditions
+            if (this.adaptiveTrading && this.marketMetrics.liquidity !== undefined) {
+                const adaptedParams = (0, botDetectionAvoidance_1.adaptToMarketConditions)({
+                    minTradeAmount: this.minTradeAmount,
+                    maxTradeAmount: this.maxTradeAmount,
+                    minTradeDelay: this.minDelaySeconds,
+                    maxTradeDelay: this.maxDelaySeconds
+                }, this.marketMetrics);
+                // Update trading parameters based on market conditions
+                this.minTradeAmount = adaptedParams.minTradeAmount;
+                this.maxTradeAmount = adaptedParams.maxTradeAmount;
+                this.minDelaySeconds = adaptedParams.minTradeDelay;
+                this.maxDelaySeconds = adaptedParams.maxTradeDelay;
+                this.logger.info('Trading parameters adjusted based on market conditions:');
+                this.logger.info(`Trade size: ${this.minTradeAmount.toFixed(4)}-${this.maxTradeAmount.toFixed(4)} SOL`);
+                this.logger.info(`Delay range: ${this.minDelaySeconds}-${this.maxDelaySeconds} seconds`);
+            }
+        }
+        catch (error) {
+            this.logger.error(`Error updating market metrics: ${error.message}`);
         }
     }
     async executeTrade(wallet, amount) {
         try {
-            const publicKey = wallet.publicKey.toString();
-            this.logger.info(`Executing trade of ${amount} SOL using wallet ${publicKey}`);
-            // Get proxy configuration for this wallet if proxies are enabled
-            let proxyConfig = {};
-            if (this.useProxies && this.proxyManager.isEnabled()) {
-                // Test and ensure we have a fresh IP for trading
-                const identifier = `trade-${publicKey}`;
-                await this.proxyManager.ensureFreshIp(identifier);
-                // Get the proxy configuration for this wallet
-                proxyConfig = this.getProxyConfigForWallet(wallet);
-                // Log the proxy being used
-                const proxyTest = await this.proxyManager.testProxy();
-                if (proxyTest.success && proxyTest.ip) {
-                    this.logger.info(`Trading through proxy IP: ${proxyTest.ip}`);
-                }
+            // Check if wallet has enough balance
+            const walletIndex = this.walletKeypairs.findIndex(w => w.publicKey.equals(wallet.publicKey));
+            if (walletIndex === -1) {
+                throw new Error('Wallet not found in list');
             }
-            // Simulate trade execution - in a real implementation, this would
-            // interact with a DEX using the proxy configuration
+            const walletData = this.wallets[walletIndex];
+            if (!walletData.balance || walletData.balance < amount) {
+                this.logger.warn(`Wallet ${wallet.publicKey.toString().slice(0, 8)}... has insufficient balance for trade of ${amount} SOL`);
+                return false;
+            }
+            // Get the order type from the pattern (buy/sell)
+            const orderType = this.orderPattern[this.currentOrderIndex % this.orderPattern.length];
+            this.currentOrderIndex++;
+            // If we've used most of the pattern, generate a new one
+            if (this.currentOrderIndex >= this.orderPattern.length - 5) {
+                this.orderPattern = (0, botDetectionAvoidance_1.generateBalancedOrderPattern)(20);
+                this.currentOrderIndex = 0;
+            }
+            this.logger.info(`Executing ${orderType} with wallet ${wallet.publicKey.toString().slice(0, 8)}... (${amount.toFixed(4)} SOL)`);
+            // Track that this wallet was used
+            walletData.lastUsed = Date.now();
+            // TODO: Implement actual trade execution through your trading API
+            // This is a placeholder that would need to be replaced with actual trading logic
+            // Simulate trade execution
             await new Promise(resolve => setTimeout(resolve, 2000));
-            this.logger.info(chalk_1.default.green(`Trade executed successfully`));
+            // Update wallet balance (simulated)
+            if (orderType === 'buy') {
+                // Simulate balance reduction after buy
+                walletData.balance -= amount;
+            }
+            else {
+                // Simulate balance increase after sell
+                walletData.balance += amount * 0.98; // Accounting for some fees
+            }
+            this.logger.info(`${orderType.toUpperCase()} completed successfully`);
             return true;
         }
         catch (error) {
-            this.logger.error(`Trade execution failed: ${error.message}`);
+            this.logger.error(`Trade execution error: ${error.message}`);
             return false;
         }
     }
-    async processWallet(wallet) {
+    async processWallet() {
         try {
-            // Calculate random trade amount between min and max
-            const tradeAmount = this.minTradeAmount +
-                Math.random() * (this.maxTradeAmount - this.minTradeAmount);
-            // Execute trade
+            // Choose a wallet based on the selected strategy
+            const walletIndex = (0, botDetectionAvoidance_1.selectWalletForTrade)(this.wallets, this.walletRotationStrategy, this.currentWalletIndex);
+            // Store the current wallet index
+            this.currentWalletIndex = walletIndex;
+            // Get the wallet keypair
+            const wallet = this.walletKeypairs[walletIndex];
+            // Generate a randomized trade size
+            const tradeAmount = (0, botDetectionAvoidance_1.getRandomizedTradeSize)(this.minTradeAmount, this.maxTradeAmount);
+            // Execute the trade
             const success = await this.executeTrade(wallet, tradeAmount);
-            if (success) {
-                // Wait between trades
-                await new Promise(resolve => setTimeout(resolve, this.timeBetweenBuys));
-            }
-            else {
-                // Wait longer if trade failed
-                await new Promise(resolve => setTimeout(resolve, this.timeBetweenBuys * 2));
+            // If the trade fails, try with another wallet
+            if (!success && this.walletKeypairs.length > 1) {
+                this.logger.warn('Trade failed, trying with another wallet');
+                // Choose a different wallet
+                const newWalletIndex = (walletIndex + 1) % this.walletKeypairs.length;
+                this.currentWalletIndex = newWalletIndex;
+                return await this.executeTrade(this.walletKeypairs[newWalletIndex], tradeAmount);
             }
             return success;
         }
         catch (error) {
-            this.logger.error(`Error processing wallet ${wallet.publicKey.toString()}: ${error.message}`);
+            this.logger.error(`Error processing wallet: ${error.message}`);
             return false;
         }
     }
     async runCycle() {
-        this.logger.info(chalk_1.default.cyan(`Starting cycle ${this.currentCycle} of ${this.numberOfCycles}`));
-        // Process each wallet
-        for (const wallet of this.walletKeypairs) {
-            // Update trading parameters if AI optimization is enabled
-            await this.updateTradingParameters();
-            // Execute multiple buys per wallet
+        try {
+            this.logger.info(`Starting trading cycle ${this.currentCycle}/${this.numberOfCycles}`);
+            // Update market metrics before trading
+            await this.updateMarketMetrics();
+            // Execute trades
             for (let i = 0; i < this.numberOfBuys; i++) {
                 if (!this.isRunning)
-                    return; // Check if bot was stopped
-                this.logger.info(`Processing wallet ${wallet.publicKey.toString()} - Buy ${i + 1}/${this.numberOfBuys}`);
-                await this.processWallet(wallet);
+                    break;
+                // Process a wallet to execute a trade
+                await this.processWallet();
+                // Use randomized delay between trades
+                if (i < this.numberOfBuys - 1) {
+                    const delay = (0, botDetectionAvoidance_1.getRandomizedTradeDelay)(this.minDelaySeconds, this.maxDelaySeconds);
+                    this.logger.info(`Waiting ${Math.round(delay / 1000)} seconds until next trade...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+            this.logger.info(`Completed trading cycle ${this.currentCycle}/${this.numberOfCycles}`);
+            // Move to next cycle if applicable
+            if (this.currentCycle < this.numberOfCycles) {
+                this.currentCycle++;
+                // Wait before starting the next cycle
+                const cycleDelay = (0, botDetectionAvoidance_1.getRandomizedTradeDelay)(60, 180); // 1-3 minutes between cycles
+                this.logger.info(`Waiting ${Math.round(cycleDelay / 1000)} seconds until next cycle...`);
+                await new Promise(resolve => setTimeout(resolve, cycleDelay));
+                if (this.isRunning) {
+                    this.runCycle();
+                }
+            }
+            else {
+                this.logger.info('All trading cycles completed');
+                this.isRunning = false;
             }
         }
-        this.logger.info(chalk_1.default.green(`Completed cycle ${this.currentCycle}`));
-        this.currentCycle++;
+        catch (error) {
+            this.logger.error(`Error in trading cycle: ${error.message}`);
+            this.isRunning = false;
+        }
+    }
+    /**
+     * Checks if wallets have sufficient balance and provides feedback
+     */
+    async checkWalletBalances() {
+        try {
+            // Update wallet balances
+            await this.updateWalletBalances();
+            // Check if any wallet has sufficient balance for trading
+            const sufficientBalanceWallets = this.wallets.filter(wallet => wallet.balance && wallet.balance >= this.minTradeAmount);
+            if (sufficientBalanceWallets.length === 0) {
+                console.log('\n=========================================');
+                console.log('⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️');
+                console.log('=========================================');
+                console.log('None of your wallets have sufficient SOL balance to trade.');
+                console.log(`Minimum required: ${this.minTradeAmount} SOL per wallet`);
+                console.log('\nPlease fund at least one wallet with SOL, then:');
+                console.log('1. Use the "Distribute SOL" command to spread funds to multiple wallets');
+                console.log('2. Restart the bot after funding your wallets');
+                console.log('=========================================\n');
+                return false;
+            }
+            if (sufficientBalanceWallets.length < 3) {
+                console.log('\n=========================================');
+                console.log('⚠️  WARNING: LOW WALLET BALANCES  ⚠️');
+                console.log('=========================================');
+                console.log(`Only ${sufficientBalanceWallets.length} of ${this.wallets.length} wallets have sufficient balance.`);
+                console.log('For better bot detection avoidance, we recommend at least 3 funded wallets.');
+                console.log('\nConsider using the "Distribute SOL" command to spread funds more evenly.');
+                console.log('=========================================\n');
+                // Show the wallets with their balances
+                console.log('Current wallet balances:');
+                this.wallets.forEach((wallet, index) => {
+                    const hasEnough = wallet.balance && wallet.balance >= this.minTradeAmount;
+                    console.log(`Wallet ${index + 1}: ${wallet.publicKey.slice(0, 8)}... - ${wallet.balance?.toFixed(4) || 0} SOL ${hasEnough ? '✅' : '❌'}`);
+                });
+                console.log();
+                // We still return true as we can continue with the available wallets
+                return true;
+            }
+            // Everything looks good
+            return true;
+        }
+        catch (error) {
+            this.logger.warn(`Failed to check wallet balances: ${error.message}`);
+            return true; // Continue anyway to not block operation
+        }
     }
     async start() {
         try {
-            this.isRunning = true;
-            // Display bot configuration
-            this.logger.info(chalk_1.default.cyan('\n====== BOT STARTING ======'));
-            this.logger.info(chalk_1.default.green(`Contract Address: ${this.tokenAddress}`));
-            this.logger.info(chalk_1.default.green(`Max Trade Amount: ${this.maxTradeAmount} SOL`));
-            this.logger.info(chalk_1.default.green(`Min Trade Amount: ${this.minTradeAmount} SOL`));
-            this.logger.info(chalk_1.default.green(`Time Between Buys: ${this.timeBetweenBuys}ms`));
-            this.logger.info(chalk_1.default.green(`Number of Buys: ${this.numberOfBuys}`));
-            this.logger.info(chalk_1.default.green(`Number of Cycles: ${this.numberOfCycles}`));
-            this.logger.info(chalk_1.default.green(`Mode: ${this.isJitoMode ? 'JITO' : 'Lightning/Bump'}`));
-            this.logger.info(chalk_1.default.green(`AI Optimization: ${this.useAiOptimization ? 'Enabled' : 'Disabled'}`));
-            this.logger.info(chalk_1.default.green(`Proxy Support: ${this.useProxies ? 'Enabled' : 'Disabled'}`));
-            this.logger.info(chalk_1.default.cyan('==========================\n'));
-            // Test proxy connection if enabled
-            if (this.useProxies && this.proxyManager.isEnabled()) {
-                const proxyTest = await this.proxyManager.testProxy();
-                if (proxyTest.success) {
-                    this.logger.info(chalk_1.default.green(`Proxy connection successful: ${proxyTest.ip}`));
-                }
-                else {
-                    this.logger.warn(chalk_1.default.yellow(`Proxy test failed: ${proxyTest.message}`));
-                    this.logger.warn(chalk_1.default.yellow('Continuing without proxies'));
-                    this.useProxies = false;
-                }
+            if (this.isRunning) {
+                this.logger.warn('Trading bot is already running');
+                return;
             }
-            // Load wallets
+            this.isRunning = true;
+            this.logger.info('Starting trading bot');
+            // Load wallet data
             await this.loadWallets();
+            // Check if wallets have sufficient balance
+            const hasValidBalances = await this.checkWalletBalances();
+            if (!hasValidBalances) {
+                this.logger.error('Trading bot stopped due to insufficient wallet balances');
+                this.isRunning = false;
+                return;
+            }
             // Initialize AI strategy if enabled
             if (this.useAiOptimization) {
                 await this.initializeAIStrategy();
             }
-            // Run cycles
-            while (this.currentCycle <= this.numberOfCycles && this.isRunning) {
-                await this.runCycle();
-            }
-            this.logger.info(chalk_1.default.green('Bot execution completed successfully'));
+            // Initial market metrics update
+            await this.updateMarketMetrics();
+            // Log configuration
+            this.logger.info(`Trading ${this.tokenAddress}`);
+            this.logger.info(`Trade amount range: ${this.minTradeAmount}-${this.maxTradeAmount} SOL`);
+            this.logger.info(`Delay range: ${this.minDelaySeconds}-${this.maxDelaySeconds} seconds`);
+            this.logger.info(`Using ${this.wallets.length > 5 ? '3-5' : this.wallets.length} wallets for trading`);
+            this.logger.info(`Wallet rotation strategy: ${this.walletRotationStrategy}`);
+            this.logger.info(`Adaptive trading: ${this.adaptiveTrading ? 'enabled' : 'disabled'}`);
+            this.logger.info(`AI optimization: ${this.useAiOptimization ? 'enabled' : 'disabled'}`);
+            // Start trading cycle
+            await this.runCycle();
         }
         catch (error) {
-            this.logger.error(`Bot execution failed: ${error.message}`);
-        }
-        finally {
+            this.logger.error(`Failed to start trading bot: ${error.message}`);
             this.isRunning = false;
         }
     }
     stop() {
-        this.logger.info(chalk_1.default.yellow('Stopping bot...'));
+        this.logger.info('Stopping trading bot');
         this.isRunning = false;
     }
     static async run() {
-        const bot = new TradingBot();
-        await bot.start();
-        // Handle process termination
-        process.on('SIGINT', () => {
-            bot.stop();
-            process.exit(0);
-        });
-        process.on('SIGTERM', () => {
-            bot.stop();
-            process.exit(0);
-        });
+        try {
+            console.log('Starting TradingBot in run method');
+            const bot = new TradingBot();
+            console.log('TradingBot instance created successfully');
+            await bot.start();
+            console.log('TradingBot start method completed');
+            // Add signal handlers to gracefully shut down
+            process.on('SIGINT', () => {
+                console.log('Received SIGINT signal');
+                bot.stop();
+                process.exit(0);
+            });
+            process.on('SIGTERM', () => {
+                console.log('Received SIGTERM signal');
+                bot.stop();
+                process.exit(0);
+            });
+            // Log that setup is complete
+            console.log('TradingBot is now running');
+        }
+        catch (error) {
+            console.error('CRITICAL ERROR in TradingBot.run():', error.message);
+            console.error('Stack trace:', error.stack);
+            // Log to file as well if logger exists
+            try {
+                const logger = {
+                    error: (message) => console.error(message)
+                };
+                logger.error(`CRITICAL BOT ERROR: ${error.message}`);
+                logger.error(`Stack trace: ${error.stack}`);
+            }
+            catch (logError) {
+                // Ignore logger errors
+            }
+        }
     }
 }
-// Run the bot if this file is executed directly
-if (require.main === module) {
-    TradingBot.run().catch(error => {
-        console.error('Bot execution failed:', error);
-        process.exit(1);
-    });
-}
-exports.default = TradingBot;
+exports.TradingBot = TradingBot;

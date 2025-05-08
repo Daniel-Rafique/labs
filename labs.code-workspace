@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../aidrops"
+		},
+		{
+			"path": "../liquidity-sniper"
+		},
+		{
+			"path": "../solana-liquidity"
+		},
+		{
+			"path": "../spl-snapshot"
+		}
+	],
+	"settings": {}
+}

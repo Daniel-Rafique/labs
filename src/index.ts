@@ -153,13 +153,13 @@ async function showMainMenu() {
         message: 'Select an action:',
         pageSize: 14, // Increased to show all options
         choices: [
-          { name: 'Create Wallets', value: 'create-wallets' },
-          { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
-          { name: 'Wallet Monitor', value: 'wallet-monitor' },
-          { name: 'Check Balances', value: 'check-balances' },
           { name: 'Start Bot', value: 'start-bot' },
           { name: 'Stop Bot', value: 'stop-bot' },
-          { name: 'Distribute SOL', value: 'distribute' },
+          { name: chalk.yellowBright('Distribute SOL') + chalk.gray(' (required for bot detection avoidance)'), value: 'distribute' },
+          { name: 'Create Wallets', value: 'create-wallets' },
+          { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
+          { name: 'Check Balances', value: 'check-balances' },
+          { name: 'Wallet Monitor', value: 'wallet-monitor' },
           { name: 'Dust Collection', value: 'dust' },
           { name: 'Create Profiles', value: 'create-profiles' },
           { name: 'Post PumpFun Replies', value: 'post-replies' },
@@ -342,84 +342,72 @@ async function handleCheckBalances() {
 
 // Handle distribute action
 async function handleDistribute() {
-  console.clear();
   showBanner();
-  console.log(chalk.cyan('== Distribute SOL ==\n'));
-
-  // Distribute menu loop
-  while (true) {
-    const { action } = await inquirer.prompt([
+  console.log(chalk.cyan('== Distribute SOL =='));
+  console.log(chalk.yellow('This command helps distribute SOL from one source wallet to multiple destination wallets.'));
+  console.log(chalk.yellow('Having 3-5 funded wallets is essential for bot detection avoidance.'));
+  console.log(chalk.yellow('The bot will rotate between these wallets to make trading patterns look more organic.'));
+  console.log();
+  
+  // Ask for distribution options
+  const { directory, amount, privacy, batch } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'directory',
+      message: 'Enter wallet directory path (default is .config):',
+      default: '.config'
+    },
+    {
+      type: 'input',
+      name: 'amount',
+      message: 'Enter SOL amount to distribute to each wallet:',
+      default: '0.01'
+    },
+    {
+      type: 'confirm',
+      name: 'privacy',
+      message: 'Enable privacy features to avoid transaction tracking?',
+      default: true
+    },
+    {
+      type: 'confirm',
+      name: 'batch',
+      message: 'Use batch transfers for faster distribution?',
+      default: false
+    }
+  ]);
+  
+  try {
+    // Run the distribute command
+    await distributeCommand({
+      directory,
+      amount,
+      privacy,
+      batch
+    });
+    
+    console.log(chalk.green('\nDistribution completed successfully!'));
+    console.log(chalk.cyan('Bot detection avoidance is now enhanced with multiple funded wallets.'));
+    
+    // Ask if they want to start the bot now
+    const { startBot } = await inquirer.prompt([
       {
-        type: 'list',
-        name: 'action',
-        message: 'Distribute SOL Options:',
-        choices: [
-          { name: 'Batch Distribution (Source → Multiple Recipients)', value: 'batch' },
-          { name: 'Single Transfer (Source → One Recipient)', value: 'advanced' },
-          { name: 'Back to Main Menu', value: 'back' }
-        ]
+        type: 'confirm',
+        name: 'startBot',
+        message: 'Do you want to start the bot now with your distributed wallets?',
+        default: false
       }
     ]);
-
-    if (action === 'back') {
-      return;
+    
+    if (startBot) {
+      await handleStartBot();
     }
-
-    if (action === 'batch') {
-      // Batch distribution
-      const { amount } = await inquirer.prompt([
-        {
-          type: 'input',
-          name: 'amount',
-          message: 'How much SOL to distribute to each wallet?',
-          default: '0.05',
-          validate: (input) => {
-            const num = parseFloat(input);
-            return !isNaN(num) && num > 0 ? true : 'Please enter a valid positive number';
-          }
-        }
-      ]);
-      
-      await distributeCommand({ directory: '.config', amount });
-    } else {
-      // Single recipient transfer
-      const { amount } = await inquirer.prompt([
-        {
-          type: 'input',
-          name: 'amount',
-          message: 'Enter amount to transfer:',
-          validate: (input) => {
-            const num = parseFloat(input);
-            return !isNaN(num) && num > 0 ? true : 'Please enter a valid positive number';
-          }
-        }
-      ]);
-      
-      // Pass false for split since this is single recipient mode
-      await transferCommand({ 
-        directory: '.config',
-        amount,
-        split: false
-      });
-    }
-
-    // Ask if user wants to distribute more funds or return to menu
-    const { nextAction } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'nextAction',
-        message: 'What would you like to do next?',
-        choices: [
-          { name: 'Make Another Transfer', value: 'more' },
-          { name: 'Back to Main Menu', value: 'back' }
-        ]
-      }
-    ]);
-
-    if (nextAction === 'back') {
-      return;
-    }
+  } catch (error: any) {
+    console.error(chalk.red(`Error: ${error.message}`));
   }
+  
+  // Return to main menu
+  return;
 }
 
 // Handle dust collection action
