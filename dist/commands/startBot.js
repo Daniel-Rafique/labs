@@ -108,22 +108,168 @@ async function startBotCommand(options) {
                     return;
                 }
             });
+            // Set up flag to track if we've shown the wallet balance error
+            let balanceErrorShown = false;
+            // Create a function to display the wallet balance error menu
+            const showWalletBalanceErrorMenu = (minRequired = minAmount) => {
+                if (balanceErrorShown)
+                    return; // Prevent showing multiple times
+                balanceErrorShown = true;
+                spinner.fail('Bot could not start due to insufficient wallet balance');
+                console.log(chalk_1.default.red('\n========================================'));
+                console.log(chalk_1.default.red('⚠️  INSUFFICIENT WALLET BALANCE DETECTED  ⚠️'));
+                console.log(chalk_1.default.red('========================================'));
+                console.log(chalk_1.default.yellow(`None of your wallets have sufficient SOL balance to trade.`));
+                console.log(chalk_1.default.yellow(`Minimum required: ${minRequired} SOL per wallet\n`));
+                // Stop the bot process since it can't continue
+                if (botProcess.pid) {
+                    try {
+                        process.kill(botProcess.pid);
+                    }
+                    catch (e) {
+                        // Ignore kill errors
+                    }
+                }
+                // Show interactive prompt for what to do next
+                inquirer_1.default.prompt([
+                    {
+                        type: 'list',
+                        name: 'action',
+                        message: 'What would you like to do?',
+                        choices: [
+                            { name: 'Distribute SOL between wallets', value: 'distribute' },
+                            { name: 'Return to main menu', value: 'menu' }
+                        ]
+                    }
+                ]).then(response => {
+                    if (response.action === 'distribute') {
+                        console.log(chalk_1.default.cyan('\nLaunching SOL distribution tool...\n'));
+                        // Import and run the distribute command
+                        Promise.resolve().then(() => __importStar(require('../commands/distribute'))).then(module => {
+                            module.distributeCommand({
+                                directory: directory || '.config',
+                                amount: '0.01' // Default minimal amount
+                            }).catch(err => {
+                                console.error(chalk_1.default.red(`\nError during SOL distribution: ${err.message}`));
+                            });
+                        });
+                    }
+                    else {
+                        console.log(chalk_1.default.cyan('\nReturning to main menu. Please fund your wallets and try again.'));
+                    }
+                });
+            };
+            // Function to check error log files for balance issues
+            const checkErrorLogs = () => {
+                try {
+                    // Check for special error log file
+                    const errorLogPath = path.join(projectRootDir, 'logs', 'wallet_error.log');
+                    if (fs.existsSync(errorLogPath)) {
+                        const logContent = fs.readFileSync(errorLogPath, 'utf8');
+                        // Check if log is from today
+                        const today = new Date().toISOString().slice(0, 10);
+                        if (logContent.includes(today) &&
+                            (logContent.includes('INSUFFICIENT_WALLET_BALANCE') ||
+                                logContent.includes('insufficient wallet balance'))) {
+                            // Try to extract the minimum amount
+                            const match = logContent.match(/Minimum required: ([0-9.]+) SOL/);
+                            const minRequired = match ? match[1] : minAmount;
+                            showWalletBalanceErrorMenu(minRequired);
+                            return true;
+                        }
+                    }
+                    // Check regular bot logs
+                    const logsDir = path.join(projectRootDir, 'logs');
+                    if (fs.existsSync(logsDir)) {
+                        const logFiles = fs.readdirSync(logsDir)
+                            .filter(file => file.startsWith('bot_'))
+                            .map(file => ({
+                            path: path.join(logsDir, file),
+                            mtime: fs.statSync(path.join(logsDir, file)).mtime.getTime()
+                        }))
+                            .sort((a, b) => b.mtime - a.mtime); // Most recent first
+                        if (logFiles.length > 0) {
+                            const recentLog = fs.readFileSync(logFiles[0].path, 'utf8');
+                            if (recentLog.includes('INSUFFICIENT_WALLET_BALANCE') ||
+                                recentLog.includes('insufficient wallet balance') ||
+                                recentLog.includes('WARNING: INSUFFICIENT WALLET BALANCE')) {
+                                // Try to extract the minimum amount
+                                const match = recentLog.match(/Minimum required: ([0-9.]+) SOL/);
+                                const minRequired = match ? match[1] : minAmount;
+                                showWalletBalanceErrorMenu(minRequired);
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+                catch (err) {
+                    console.error(chalk_1.default.gray('Error checking log files:'), err);
+                    return false;
+                }
+            };
             // Handle stdout data
             botProcess.stdout?.on('data', (data) => {
                 spinner.stop();
-                console.log(chalk_1.default.blue('[BOT]'), data.toString().trim());
+                const output = data.toString().trim();
+                // Check if this is the insufficient balance warning
+                if (output.includes('insufficient wallet balance') ||
+                    output.includes('INSUFFICIENT WALLET BALANCE') ||
+                    output.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    // Extract the minimum SOL requirement if possible
+                    const match = output.match(/Minimum required: ([0-9.]+) SOL/);
+                    const minRequired = match ? match[1] : minAmount;
+                    showWalletBalanceErrorMenu(minRequired);
+                    return;
+                }
+                console.log(chalk_1.default.blue('[BOT]'), output);
             });
             // Handle stderr data
             botProcess.stderr?.on('data', (data) => {
                 spinner.stop();
-                console.error(chalk_1.default.red('[BOT ERROR]'), data.toString().trim());
+                const output = data.toString().trim();
+                // Check if this is the insufficient balance error in stderr
+                if (output.includes('insufficient wallet balance') ||
+                    output.includes('INSUFFICIENT WALLET BALANCE') ||
+                    output.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    // Extract the minimum SOL requirement if possible
+                    const match = output.match(/Minimum required: ([0-9.]+) SOL/);
+                    const minRequired = match ? match[1] : minAmount;
+                    showWalletBalanceErrorMenu(minRequired);
+                    return;
+                }
+                console.error(chalk_1.default.red('[BOT ERROR]'), output);
             });
+            // Add an exit handler to check for error conditions
+            botProcess.on('exit', (code, signal) => {
+                // If the process exited with a non-zero code and we haven't already shown an error message
+                if (code !== 0 && !balanceErrorShown) {
+                    // Check for errors in log files
+                    if (!checkErrorLogs()) {
+                        spinner.fail(`Bot process exited with code ${code}`);
+                        console.log(chalk_1.default.yellow('\nThe bot exited unexpectedly. This could be due to insufficient wallet balance.'));
+                        console.log(chalk_1.default.yellow('Please check that your wallets have enough SOL and try again.'));
+                    }
+                }
+            });
+            // Set up periodic log checking
+            const logCheckInterval = setInterval(() => {
+                if (!balanceErrorShown) {
+                    checkErrorLogs();
+                }
+            }, 2000); // Check every 2 seconds
+            // Clear log check interval after 30 seconds
+            setTimeout(() => {
+                clearInterval(logCheckInterval);
+            }, 30000);
             // Notify user when bot has started
             setTimeout(() => {
-                spinner.succeed('Bot started successfully!');
-                console.log(chalk_1.default.green('\nBot is now running in the background.'));
-                console.log(chalk_1.default.yellow('Press Ctrl+C to stop the CLI, but the bot will continue running.'));
-                console.log(chalk_1.default.yellow('To stop the bot, you will need to terminate it manually using task manager or the kill command.'));
+                if (spinner.isSpinning && !balanceErrorShown) { // Only update if we haven't shown an error already
+                    spinner.succeed('Bot started successfully!');
+                    console.log(chalk_1.default.green('\nBot is now running in the background.'));
+                    console.log(chalk_1.default.yellow('Press Ctrl+C to stop the CLI, but the bot will continue running.'));
+                    console.log(chalk_1.default.yellow('To stop the bot, you will need to terminate it manually using task manager or the kill command.'));
+                }
             }, 3000);
         }
         catch (error) {

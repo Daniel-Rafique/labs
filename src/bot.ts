@@ -75,11 +75,56 @@ class TradingBot {
 
   constructor() {
     // Initialize logger
+    const logDir = path.resolve(__dirname, '../logs');
+    
+    // Ensure log directory exists
+    try {
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+    } catch (err) {
+      // Ignore directory creation errors, fall back to console only logging
+    }
+    
+    // Log file path
+    const logFile = path.join(logDir, 'bot.log');
+    
+    // Create a simple file logger
+    const fileLogger = {
+      log: (message: string) => {
+        try {
+          fs.appendFileSync(logFile, `${new Date().toISOString()} [INFO] ${message}\n`);
+        } catch (err) {
+          // Ignore file errors
+        }
+      },
+      error: (message: string) => {
+        try {
+          fs.appendFileSync(logFile, `${new Date().toISOString()} [ERROR] ${message}\n`);
+        } catch (err) {
+          // Ignore file errors
+        }
+      }
+    };
+    
+    // Initialize logger with both console and file output
     this.logger = {
-      info: (message: string) => console.log(message),
-      warn: (message: string) => console.warn(message),
-      error: (message: string) => console.error(message),
-      debug: (message: string) => console.debug(message)
+      info: (message: string) => {
+        console.log(message);
+        fileLogger.log(message);
+      },
+      warn: (message: string) => {
+        console.warn(message);
+        fileLogger.log(`[WARN] ${message}`);
+      },
+      error: (message: string) => {
+        console.error(message);
+        fileLogger.error(message);
+      },
+      debug: (message: string) => {
+        console.debug(message);
+        fileLogger.log(`[DEBUG] ${message}`);
+      }
     };
 
     // Load configuration from environment variables
@@ -786,16 +831,29 @@ class TradingBot {
       );
       
       if (sufficientBalanceWallets.length === 0) {
-        console.log('\n=========================================');
-        console.log('⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️');
-        console.log('=========================================');
-        console.log('None of your wallets have sufficient SOL balance to trade.');
-        console.log(`Minimum required: ${this.minTradeAmount} SOL per wallet`);
-        console.log('\nPlease fund at least one wallet with SOL, then:');
-        console.log('1. Use the "Distribute SOL" command to spread funds to multiple wallets');
-        console.log('2. Restart the bot after funding your wallets');
-        console.log('=========================================\n');
-        return false;
+        // Create a very visible error message for console output
+        const errorMsg = `
+=========================================
+⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️
+=========================================
+None of your wallets have sufficient SOL balance to trade.
+Minimum required: ${this.minTradeAmount} SOL per wallet
+
+Please fund at least one wallet with SOL, then:
+1. Use the "Distribute SOL" command to spread funds to multiple wallets
+2. Restart the bot after funding your wallets
+=========================================
+`;
+        // Output to both stderr and stdout for maximum visibility
+        console.error(errorMsg);
+        console.log(errorMsg);
+        
+        // Log to our internal logger
+        this.logger.error('INSUFFICIENT_WALLET_BALANCE: None of wallets have sufficient SOL balance');
+        this.logger.error(`Minimum required: ${this.minTradeAmount} SOL per wallet`);
+        
+        // Throw a specially formatted error that the parent process can detect
+        throw new Error(`INSUFFICIENT_WALLET_BALANCE: Minimum required: ${this.minTradeAmount} SOL per wallet`);
       }
       
       if (sufficientBalanceWallets.length < 3) {
@@ -822,8 +880,12 @@ class TradingBot {
       // Everything looks good
       return true;
     } catch (error: any) {
-      this.logger.warn(`Failed to check wallet balances: ${error.message}`);
-      return true; // Continue anyway to not block operation
+      // If it's not our specific insufficient balance error, log it as a warning
+      if (!error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+        this.logger.warn(`Failed to check wallet balances: ${error.message}`);
+      }
+      // Re-throw to propagate the error
+      throw error;
     }
   }
 
@@ -841,11 +903,54 @@ class TradingBot {
       await this.loadWallets();
       
       // Check if wallets have sufficient balance
-      const hasValidBalances = await this.checkWalletBalances();
-      if (!hasValidBalances) {
-        this.logger.error('Trading bot stopped due to insufficient wallet balances');
-        this.isRunning = false;
-        return;
+      try {
+        const hasValidBalances = await this.checkWalletBalances();
+        if (!hasValidBalances) {
+          // This case is covered by the exception now, but keep as a backup
+          this.logger.error('Trading bot stopped due to insufficient wallet balances');
+          this.isRunning = false;
+          
+          // Make sure we immediately exit if we encounter an insufficient balance error
+          process.exitCode = 1;
+          throw new Error(`INSUFFICIENT_WALLET_BALANCE: Minimum required: ${this.minTradeAmount} SOL per wallet`);
+        }
+      } catch (balanceError: any) {
+        // Format error message for console output before re-throwing
+        if (balanceError.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+          process.exitCode = 1;
+          // Process is likely not exiting immediately, so explicitly log
+          this.logger.error('Trading bot stopped due to insufficient wallet balances');
+          this.isRunning = false;
+          
+          // Send another set of direct console messages for maximum visibility
+          const errorMsg = `
+=========================================
+⚠️  FATAL ERROR: INSUFFICIENT WALLET BALANCE  ⚠️
+=========================================
+Bot execution stopped due to insufficient wallet balances.
+${balanceError.message}
+=========================================
+`;
+          // Print to both stdout and stderr
+          console.error(errorMsg);
+          console.log(errorMsg);
+          
+          // For debugging, also write this to a special error file
+          try {
+            const errorFile = path.resolve(__dirname, '../logs/wallet_error.log');
+            fs.writeFileSync(errorFile, `${new Date().toISOString()} - ${errorMsg}\n`, { flag: 'a' });
+          } catch (e) {
+            // Ignore error file write failures
+          }
+          
+          // Re-throw to propagate to the parent process
+          throw balanceError;
+        } else {
+          // For other errors
+          this.isRunning = false;
+          this.logger.error(`Error during wallet balance check: ${balanceError.message}`);
+          throw balanceError;
+        }
       }
       
       // Initialize AI strategy if enabled
@@ -868,8 +973,22 @@ class TradingBot {
       // Start trading cycle
       await this.runCycle();
     } catch (error: any) {
+      // If it's already an insufficient balance error, ensure we exit
+      if (error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+        this.isRunning = false;
+        process.exitCode = 1;
+        
+        // Send one more direct console message for maximum visibility
+        console.error(`\n🚨 WALLET BALANCE ERROR: ${error.message}\n`);
+        
+        throw error;
+      }
+      
       this.logger.error(`Failed to start trading bot: ${error.message}`);
       this.isRunning = false;
+      
+      // Re-throw to propagate to the parent process
+      throw error;
     }
   }
 
@@ -883,8 +1002,28 @@ class TradingBot {
       console.log('Starting TradingBot in run method');
       const bot = new TradingBot();
       console.log('TradingBot instance created successfully');
-      await bot.start();
-      console.log('TradingBot start method completed');
+      
+      try {
+        await bot.start();
+        console.log('TradingBot start method completed');
+      } catch (startError: any) {
+        // Check for insufficient balance specifically
+        if (startError.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+          console.error('\n🚫 Bot failed to start due to insufficient wallet balance 🚫');
+          // Optionally print guidance
+          console.log('\nTo resolve this issue:');
+          console.log('1. Fund your wallets with sufficient SOL');
+          console.log('2. Use the "Distribute SOL" command to spread funds');
+          console.log('3. Restart the bot\n');
+          
+          // Force process to exit with error
+          process.exit(1);
+        } else {
+          // For other errors, just log them
+          console.error('Error starting TradingBot:', startError.message);
+          process.exit(1);
+        }
+      }
 
       // Add signal handlers to gracefully shut down
       process.on('SIGINT', () => {
@@ -901,9 +1040,23 @@ class TradingBot {
       
       // Log that setup is complete
       console.log('TradingBot is now running');
+      
+      // Return a resolved promise
+      return Promise.resolve();
     } catch (error: any) {
       console.error('CRITICAL ERROR in TradingBot.run():', error.message);
       console.error('Stack trace:', error.stack);
+      
+      // Special handling for insufficient balance errors
+      if (error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+        console.error('\n🚫 Bot could not start due to insufficient wallet balance 🚫');
+        // Print the specific minimum requirement if available
+        const match = error.message.match(/Minimum required: ([0-9.]+) SOL/);
+        if (match) {
+          console.error(`Minimum required: ${match[1]} SOL per wallet`);
+        }
+        process.exit(1);
+      }
       
       // Log to file as well if logger exists
       try {
@@ -915,6 +1068,12 @@ class TradingBot {
       } catch (logError) {
         // Ignore logger errors
       }
+      
+      // Ensure we exit with error code
+      process.exit(1);
+      
+      // Even though we've exited, TypeScript wants us to return a Promise
+      return Promise.reject(error);
     }
   }
 }

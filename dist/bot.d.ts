@@ -54,6 +54,18 @@ declare class TradingBot {
      */
     private updateMarketMetrics;
     private executeTrade;
+    /**
+     * Get token balances for a specific wallet
+     * @param wallet The wallet keypair
+     * @returns Array of tokens with their balances
+     */
+    private getWalletTokenBalances;
+    /**
+     * Sell tokens to rebalance a wallet's SOL balance
+     * @param wallet The wallet keypair
+     * @returns Boolean indicating if rebalancing was successful
+     */
+    private rebalanceWallet;
     private processWallet;
     private runCycle;
     /**

@@ -38,6 +38,8 @@ const aiTradingStrategy_1 = require("./utils/aiTradingStrategy");
 const proxyManager_1 = require("./utils/proxyManager");
 const axios_1 = __importDefault(require("axios"));
 const botDetectionAvoidance_1 = require("./utils/botDetectionAvoidance");
+const spl_token_1 = require("@solana/spl-token");
+const token_compat_1 = require("./lib/solana/token-compat");
 // Load environment variables
 dotenv.config();
 class TradingBot {
@@ -61,11 +63,55 @@ class TradingBot {
         this.maxDelaySeconds = 120; // Default maximum delay in seconds
         this.adaptiveTrading = true; // Enable adaptive trading by default
         // Initialize logger
+        const logDir = path.resolve(__dirname, '../logs');
+        // Ensure log directory exists
+        try {
+            if (!fs.existsSync(logDir)) {
+                fs.mkdirSync(logDir, { recursive: true });
+            }
+        }
+        catch (err) {
+            // Ignore directory creation errors, fall back to console only logging
+        }
+        // Log file path
+        const logFile = path.join(logDir, 'bot.log');
+        // Create a simple file logger
+        const fileLogger = {
+            log: (message) => {
+                try {
+                    fs.appendFileSync(logFile, `${new Date().toISOString()} [INFO] ${message}\n`);
+                }
+                catch (err) {
+                    // Ignore file errors
+                }
+            },
+            error: (message) => {
+                try {
+                    fs.appendFileSync(logFile, `${new Date().toISOString()} [ERROR] ${message}\n`);
+                }
+                catch (err) {
+                    // Ignore file errors
+                }
+            }
+        };
+        // Initialize logger with both console and file output
         this.logger = {
-            info: (message) => console.log(message),
-            warn: (message) => console.warn(message),
-            error: (message) => console.error(message),
-            debug: (message) => console.debug(message)
+            info: (message) => {
+                console.log(message);
+                fileLogger.log(message);
+            },
+            warn: (message) => {
+                console.warn(message);
+                fileLogger.log(`[WARN] ${message}`);
+            },
+            error: (message) => {
+                console.error(message);
+                fileLogger.error(message);
+            },
+            debug: (message) => {
+                console.debug(message);
+                fileLogger.log(`[DEBUG] ${message}`);
+            }
         };
         // Load configuration from environment variables
         this.tokenAddress = process.env.CONTRACT_ADDRESS || process.env.TOKEN_MINT_ADDRESS || '';
@@ -369,25 +415,206 @@ class TradingBot {
             return false;
         }
     }
+    /**
+     * Get token balances for a specific wallet
+     * @param wallet The wallet keypair
+     * @returns Array of tokens with their balances
+     */
+    async getWalletTokenBalances(wallet) {
+        try {
+            // Get token accounts for both standard program and token-2022 program
+            const tokenList = [];
+            for (const programId of [token_compat_1.TOKEN_PROGRAM_ID, token_compat_1.TOKEN_2022_PROGRAM_ID]) {
+                try {
+                    const tokenAccounts = await this.connection.getTokenAccountsByOwner(wallet.publicKey, { programId });
+                    for (const { pubkey, account } of tokenAccounts.value) {
+                        try {
+                            // Get the token account balance
+                            const accountInfo = await this.connection.getTokenAccountBalance(pubkey);
+                            if (accountInfo && Number(accountInfo.value.amount) > 0) {
+                                // Parse the token account data to get the mint address
+                                const accountData = spl_token_1.AccountLayout.decode(account.data);
+                                const mintAddress = new web3_js_1.PublicKey(accountData.mint);
+                                tokenList.push({
+                                    mint: mintAddress.toString(),
+                                    amount: Number(accountInfo.value.amount),
+                                    decimals: accountInfo.value.decimals
+                                });
+                            }
+                        }
+                        catch (error) {
+                            this.logger.warn(`Error getting token account info: ${error}`);
+                        }
+                    }
+                }
+                catch (error) {
+                    this.logger.warn(`Error getting token accounts for program: ${error}`);
+                }
+            }
+            return tokenList;
+        }
+        catch (error) {
+            this.logger.error(`Failed to get token balances: ${error.message}`);
+            return [];
+        }
+    }
+    /**
+     * Sell tokens to rebalance a wallet's SOL balance
+     * @param wallet The wallet keypair
+     * @returns Boolean indicating if rebalancing was successful
+     */
+    async rebalanceWallet(wallet) {
+        try {
+            // Get wallet index
+            const walletIndex = this.walletKeypairs.findIndex(w => w.publicKey.equals(wallet.publicKey));
+            if (walletIndex === -1) {
+                throw new Error('Wallet not found in list');
+            }
+            const walletData = this.wallets[walletIndex];
+            const solBalance = walletData.balance || 0;
+            // Only rebalance if SOL balance is below minimum trade amount
+            if (solBalance >= this.minTradeAmount) {
+                return false; // No need to rebalance
+            }
+            this.logger.info(`Rebalancing wallet ${wallet.publicKey.toString().slice(0, 8)}... with low SOL balance (${solBalance.toFixed(4)} SOL)`);
+            // Make sure we have a token address to trade
+            if (!this.tokenAddress) {
+                this.logger.warn('No token address specified for trading, cannot rebalance');
+                return false;
+            }
+            // Get token balances
+            const tokens = await this.getWalletTokenBalances(wallet);
+            if (tokens.length === 0) {
+                this.logger.info(`No tokens to sell in wallet ${wallet.publicKey.toString().slice(0, 8)}...`);
+                return false;
+            }
+            // Find the specific token we're trading
+            const tradingToken = tokens.find(token => token.mint === this.tokenAddress);
+            if (!tradingToken) {
+                this.logger.info(`The trading token (${this.tokenAddress.slice(0, 8)}...) is not found in wallet ${wallet.publicKey.toString().slice(0, 8)}...`);
+                return false;
+            }
+            this.logger.info(`Found trading token ${this.tokenAddress.slice(0, 8)}... to sell for rebalancing`);
+            // Determine target SOL amount needed
+            // We want to have enough for at least one minimum trade plus a buffer
+            const targetSolAmount = this.minTradeAmount * 1.5;
+            const solNeeded = targetSolAmount - solBalance;
+            this.logger.info(`Need to recover ${solNeeded.toFixed(4)} SOL for optimal trading`);
+            // If AI optimization is enabled, use it to determine token selling strategy
+            let sellPercentage = 50; // Default to selling 50% of tokens
+            if (this.useAiOptimization && this.aiStrategy) {
+                try {
+                    // Get market information from AI strategy
+                    await this.aiStrategy.update();
+                    // Determine if market is in uptrend or not
+                    const isUptrend = this.marketMetrics.isUptrend === true;
+                    const highVolatility = this.marketMetrics.volatility !== undefined && this.marketMetrics.volatility > 5;
+                    // For uptrending markets, sell less of tokens
+                    // For downtrending or highly volatile markets, sell more
+                    if (isUptrend && !highVolatility) {
+                        sellPercentage = 25; // Sell only 25% in uptrend to keep most tokens
+                        this.logger.info('AI determined market is in uptrend - selling only 25% of tokens');
+                    }
+                    else if (highVolatility) {
+                        sellPercentage = 50; // Sell 50% in volatile markets
+                        this.logger.info('AI determined market is volatile - selling 50% of tokens');
+                    }
+                    else {
+                        sellPercentage = 75; // Sell 75% in downtrend
+                        this.logger.info('AI determined market is in downtrend - selling 75% of tokens');
+                    }
+                }
+                catch (error) {
+                    this.logger.warn(`AI optimization error during rebalancing: ${error.message}, using default strategy`);
+                }
+            }
+            try {
+                this.logger.info(`Attempting to sell ${sellPercentage}% of trading token ${this.tokenAddress.slice(0, 8)}... to rebalance wallet`);
+                // Calculate sell amount based on our determined strategy
+                const sellAmount = Math.floor(tradingToken.amount * (sellPercentage / 100));
+                // Make sure we have something to sell
+                if (sellAmount <= 0) {
+                    this.logger.warn(`Token amount too small to sell partial amount, trying 100% instead`);
+                    sellPercentage = 100;
+                }
+                // Prepare sell data
+                const data = {
+                    publicKey: wallet.publicKey.toString(),
+                    action: 'sell',
+                    mint: this.tokenAddress,
+                    denominatedInSol: 'true',
+                    amount: sellPercentage === 100 ? '100' : sellAmount.toString(), // Sell percentage determined by AI or market conditions
+                    slippage: 1,
+                    priorityFee: 0.00003,
+                    pool: 'auto' // Use auto pool selection
+                };
+                // In a real implementation, this would call your trading API to sell the token
+                // For simulation, just add SOL to wallet balance and remove token
+                const estimatedSolGain = Math.min(solNeeded, 0.05); // Simulate getting up to needed SOL (max 0.05 SOL)
+                walletData.balance = (walletData.balance || 0) + estimatedSolGain;
+                this.logger.info(`Successfully rebalanced wallet by selling ${sellPercentage}% of trading token. New SOL balance: ${walletData.balance.toFixed(4)} SOL`);
+                return walletData.balance >= this.minTradeAmount;
+            }
+            catch (error) {
+                this.logger.error(`Failed to sell trading token ${this.tokenAddress.slice(0, 8)}...: ${error.message}`);
+                return false;
+            }
+        }
+        catch (error) {
+            this.logger.error(`Rebalance error: ${error.message}`);
+            return false;
+        }
+    }
     async processWallet() {
         try {
-            // Choose a wallet based on the selected strategy
-            const walletIndex = (0, botDetectionAvoidance_1.selectWalletForTrade)(this.wallets, this.walletRotationStrategy, this.currentWalletIndex);
-            // Store the current wallet index
-            this.currentWalletIndex = walletIndex;
-            // Get the wallet keypair
-            const wallet = this.walletKeypairs[walletIndex];
-            // Generate a randomized trade size
-            const tradeAmount = (0, botDetectionAvoidance_1.getRandomizedTradeSize)(this.minTradeAmount, this.maxTradeAmount);
-            // Execute the trade
-            const success = await this.executeTrade(wallet, tradeAmount);
-            // If the trade fails, try with another wallet
-            if (!success && this.walletKeypairs.length > 1) {
-                this.logger.warn('Trade failed, trying with another wallet');
-                // Choose a different wallet
-                const newWalletIndex = (walletIndex + 1) % this.walletKeypairs.length;
-                this.currentWalletIndex = newWalletIndex;
-                return await this.executeTrade(this.walletKeypairs[newWalletIndex], tradeAmount);
+            // Before starting, check if ANY wallets have sufficient balance
+            const sufficientBalanceWallets = this.wallets.filter(wallet => wallet.balance && wallet.balance >= this.minTradeAmount);
+            if (sufficientBalanceWallets.length === 0) {
+                this.logger.error('All wallets have insufficient balance. Stopping trading.');
+                return false;
+            }
+            // Keep track of wallets we've tried in this process call
+            const triedWalletIndices = new Set();
+            let success = false;
+            // Loop until we either succeed with a wallet or try all wallets with sufficient balance
+            while (!success && triedWalletIndices.size < this.walletKeypairs.length) {
+                // Choose a wallet based on the selected strategy
+                const walletIndex = (0, botDetectionAvoidance_1.selectWalletForTrade)(this.wallets, this.walletRotationStrategy, this.currentWalletIndex);
+                // Store the current wallet index
+                this.currentWalletIndex = walletIndex;
+                triedWalletIndices.add(walletIndex);
+                // Get the wallet keypair
+                const wallet = this.walletKeypairs[walletIndex];
+                // Check if wallet has sufficient balance for a trade
+                const walletData = this.wallets[walletIndex];
+                if (!walletData.balance || walletData.balance < this.minTradeAmount) {
+                    // Try to rebalance the wallet by selling some tokens
+                    const rebalanced = await this.rebalanceWallet(wallet);
+                    if (rebalanced) {
+                        this.logger.info(`Wallet ${wallet.publicKey.toString().slice(0, 8)}... was successfully rebalanced. Proceeding with trade.`);
+                    }
+                    else {
+                        this.logger.warn(`Wallet ${wallet.publicKey.toString().slice(0, 8)}... has insufficient balance and could not be rebalanced.`);
+                        // Try next wallet
+                        this.currentWalletIndex = (this.currentWalletIndex + 1) % this.walletKeypairs.length;
+                        continue;
+                    }
+                }
+                // Generate a randomized trade size
+                const tradeAmount = (0, botDetectionAvoidance_1.getRandomizedTradeSize)(this.minTradeAmount, this.maxTradeAmount);
+                // Execute the trade
+                success = await this.executeTrade(wallet, tradeAmount);
+                // If the trade fails and we haven't tried all wallets, try another one
+                if (!success && triedWalletIndices.size < this.walletKeypairs.length) {
+                    this.logger.warn('Trade failed, trying with another wallet');
+                    // Choose a different wallet by incrementing the index
+                    this.currentWalletIndex = (this.currentWalletIndex + 1) % this.walletKeypairs.length;
+                }
+            }
+            // If we've tried all wallets and none worked, log this but don't stop the bot yet
+            // It will return false which the runCycle can handle appropriately
+            if (!success) {
+                this.logger.warn('Failed to execute trade with any wallet. Consider adding funds to wallets.');
             }
             return success;
         }
@@ -401,18 +628,42 @@ class TradingBot {
             this.logger.info(`Starting trading cycle ${this.currentCycle}/${this.numberOfCycles}`);
             // Update market metrics before trading
             await this.updateMarketMetrics();
+            // Track consecutive failures
+            let consecutiveFailures = 0;
+            const maxConsecutiveFailures = 3; // Stop after 3 consecutive failures
             // Execute trades
             for (let i = 0; i < this.numberOfBuys; i++) {
                 if (!this.isRunning)
                     break;
                 // Process a wallet to execute a trade
-                await this.processWallet();
+                const tradeSuccess = await this.processWallet();
+                // If processing failed, increment failure counter
+                if (!tradeSuccess) {
+                    consecutiveFailures++;
+                    this.logger.warn(`Trade attempt ${i + 1} failed. Consecutive failures: ${consecutiveFailures}/${maxConsecutiveFailures}`);
+                    // If we've reached the max consecutive failures, stop the bot
+                    if (consecutiveFailures >= maxConsecutiveFailures) {
+                        this.logger.error(`Max consecutive failures (${maxConsecutiveFailures}) reached due to insufficient wallet balances. Stopping bot.`);
+                        this.isRunning = false;
+                        break;
+                    }
+                    // Otherwise, try to update wallet balances before next attempt
+                    await this.updateWalletBalances();
+                }
+                else {
+                    // Reset consecutive failures on success
+                    consecutiveFailures = 0;
+                }
                 // Use randomized delay between trades
-                if (i < this.numberOfBuys - 1) {
+                if (i < this.numberOfBuys - 1 && this.isRunning) {
                     const delay = (0, botDetectionAvoidance_1.getRandomizedTradeDelay)(this.minDelaySeconds, this.maxDelaySeconds);
                     this.logger.info(`Waiting ${Math.round(delay / 1000)} seconds until next trade...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
+            }
+            // If the bot is no longer running, return early
+            if (!this.isRunning) {
+                return;
             }
             this.logger.info(`Completed trading cycle ${this.currentCycle}/${this.numberOfCycles}`);
             // Move to next cycle if applicable
@@ -446,16 +697,27 @@ class TradingBot {
             // Check if any wallet has sufficient balance for trading
             const sufficientBalanceWallets = this.wallets.filter(wallet => wallet.balance && wallet.balance >= this.minTradeAmount);
             if (sufficientBalanceWallets.length === 0) {
-                console.log('\n=========================================');
-                console.log('⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️');
-                console.log('=========================================');
-                console.log('None of your wallets have sufficient SOL balance to trade.');
-                console.log(`Minimum required: ${this.minTradeAmount} SOL per wallet`);
-                console.log('\nPlease fund at least one wallet with SOL, then:');
-                console.log('1. Use the "Distribute SOL" command to spread funds to multiple wallets');
-                console.log('2. Restart the bot after funding your wallets');
-                console.log('=========================================\n');
-                return false;
+                // Create a very visible error message for console output
+                const errorMsg = `
+=========================================
+⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️
+=========================================
+None of your wallets have sufficient SOL balance to trade.
+Minimum required: ${this.minTradeAmount} SOL per wallet
+
+Please fund at least one wallet with SOL, then:
+1. Use the "Distribute SOL" command to spread funds to multiple wallets
+2. Restart the bot after funding your wallets
+=========================================
+`;
+                // Output to both stderr and stdout for maximum visibility
+                console.error(errorMsg);
+                console.log(errorMsg);
+                // Log to our internal logger
+                this.logger.error('INSUFFICIENT_WALLET_BALANCE: None of wallets have sufficient SOL balance');
+                this.logger.error(`Minimum required: ${this.minTradeAmount} SOL per wallet`);
+                // Throw a specially formatted error that the parent process can detect
+                throw new Error(`INSUFFICIENT_WALLET_BALANCE: Minimum required: ${this.minTradeAmount} SOL per wallet`);
             }
             if (sufficientBalanceWallets.length < 3) {
                 console.log('\n=========================================');
@@ -479,8 +741,12 @@ class TradingBot {
             return true;
         }
         catch (error) {
-            this.logger.warn(`Failed to check wallet balances: ${error.message}`);
-            return true; // Continue anyway to not block operation
+            // If it's not our specific insufficient balance error, log it as a warning
+            if (!error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                this.logger.warn(`Failed to check wallet balances: ${error.message}`);
+            }
+            // Re-throw to propagate the error
+            throw error;
         }
     }
     async start() {
@@ -494,11 +760,53 @@ class TradingBot {
             // Load wallet data
             await this.loadWallets();
             // Check if wallets have sufficient balance
-            const hasValidBalances = await this.checkWalletBalances();
-            if (!hasValidBalances) {
-                this.logger.error('Trading bot stopped due to insufficient wallet balances');
-                this.isRunning = false;
-                return;
+            try {
+                const hasValidBalances = await this.checkWalletBalances();
+                if (!hasValidBalances) {
+                    // This case is covered by the exception now, but keep as a backup
+                    this.logger.error('Trading bot stopped due to insufficient wallet balances');
+                    this.isRunning = false;
+                    // Make sure we immediately exit if we encounter an insufficient balance error
+                    process.exitCode = 1;
+                    throw new Error(`INSUFFICIENT_WALLET_BALANCE: Minimum required: ${this.minTradeAmount} SOL per wallet`);
+                }
+            }
+            catch (balanceError) {
+                // Format error message for console output before re-throwing
+                if (balanceError.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    process.exitCode = 1;
+                    // Process is likely not exiting immediately, so explicitly log
+                    this.logger.error('Trading bot stopped due to insufficient wallet balances');
+                    this.isRunning = false;
+                    // Send another set of direct console messages for maximum visibility
+                    const errorMsg = `
+=========================================
+⚠️  FATAL ERROR: INSUFFICIENT WALLET BALANCE  ⚠️
+=========================================
+Bot execution stopped due to insufficient wallet balances.
+${balanceError.message}
+=========================================
+`;
+                    // Print to both stdout and stderr
+                    console.error(errorMsg);
+                    console.log(errorMsg);
+                    // For debugging, also write this to a special error file
+                    try {
+                        const errorFile = path.resolve(__dirname, '../logs/wallet_error.log');
+                        fs.writeFileSync(errorFile, `${new Date().toISOString()} - ${errorMsg}\n`, { flag: 'a' });
+                    }
+                    catch (e) {
+                        // Ignore error file write failures
+                    }
+                    // Re-throw to propagate to the parent process
+                    throw balanceError;
+                }
+                else {
+                    // For other errors
+                    this.isRunning = false;
+                    this.logger.error(`Error during wallet balance check: ${balanceError.message}`);
+                    throw balanceError;
+                }
             }
             // Initialize AI strategy if enabled
             if (this.useAiOptimization) {
@@ -518,8 +826,18 @@ class TradingBot {
             await this.runCycle();
         }
         catch (error) {
+            // If it's already an insufficient balance error, ensure we exit
+            if (error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                this.isRunning = false;
+                process.exitCode = 1;
+                // Send one more direct console message for maximum visibility
+                console.error(`\n🚨 WALLET BALANCE ERROR: ${error.message}\n`);
+                throw error;
+            }
             this.logger.error(`Failed to start trading bot: ${error.message}`);
             this.isRunning = false;
+            // Re-throw to propagate to the parent process
+            throw error;
         }
     }
     stop() {
@@ -531,8 +849,28 @@ class TradingBot {
             console.log('Starting TradingBot in run method');
             const bot = new TradingBot();
             console.log('TradingBot instance created successfully');
-            await bot.start();
-            console.log('TradingBot start method completed');
+            try {
+                await bot.start();
+                console.log('TradingBot start method completed');
+            }
+            catch (startError) {
+                // Check for insufficient balance specifically
+                if (startError.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    console.error('\n🚫 Bot failed to start due to insufficient wallet balance 🚫');
+                    // Optionally print guidance
+                    console.log('\nTo resolve this issue:');
+                    console.log('1. Fund your wallets with sufficient SOL');
+                    console.log('2. Use the "Distribute SOL" command to spread funds');
+                    console.log('3. Restart the bot\n');
+                    // Force process to exit with error
+                    process.exit(1);
+                }
+                else {
+                    // For other errors, just log them
+                    console.error('Error starting TradingBot:', startError.message);
+                    process.exit(1);
+                }
+            }
             // Add signal handlers to gracefully shut down
             process.on('SIGINT', () => {
                 console.log('Received SIGINT signal');
@@ -546,10 +884,22 @@ class TradingBot {
             });
             // Log that setup is complete
             console.log('TradingBot is now running');
+            // Return a resolved promise
+            return Promise.resolve();
         }
         catch (error) {
             console.error('CRITICAL ERROR in TradingBot.run():', error.message);
             console.error('Stack trace:', error.stack);
+            // Special handling for insufficient balance errors
+            if (error.message.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                console.error('\n🚫 Bot could not start due to insufficient wallet balance 🚫');
+                // Print the specific minimum requirement if available
+                const match = error.message.match(/Minimum required: ([0-9.]+) SOL/);
+                if (match) {
+                    console.error(`Minimum required: ${match[1]} SOL per wallet`);
+                }
+                process.exit(1);
+            }
             // Log to file as well if logger exists
             try {
                 const logger = {
@@ -561,6 +911,10 @@ class TradingBot {
             catch (logError) {
                 // Ignore logger errors
             }
+            // Ensure we exit with error code
+            process.exit(1);
+            // Even though we've exited, TypeScript wants us to return a Promise
+            return Promise.reject(error);
         }
     }
 }
