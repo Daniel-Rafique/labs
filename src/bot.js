@@ -8,7 +8,7 @@ const fs = require('fs');
 const chalk = require('chalk');
 
 // Load environment variables
-dotenv.config();
+        dotenv.config();
 
 // Create a banner for insufficient wallet balance errors
 function displayInsufficientBalanceBanner(message) {
@@ -145,7 +145,7 @@ function isTypeScriptFileNewer() {
     const jsStats = fs.statSync(tsCompiledPath);
     
     return tsStats.mtime > jsStats.mtime;
-  } catch (error) {
+                } catch (error) {
     console.error('Error checking file stats:', error);
     return true; // Assume it's newer if there's an error
   }
@@ -307,17 +307,17 @@ async function main() {
           displayInsufficientBalanceBanner(moduleError.message);
           
           delayedExit(1);
-        } else {
+                        } else {
           // Other errors
           console.error(chalk.red(`Error loading bot module: ${moduleError.message}`));
           delayedExit(1);
         }
       }
-    } else {
+            } else {
       console.error(chalk.red('Error: Could not find compiled bot. Please run "npm run build" first.'));
       delayedExit(1);
-    }
-  } catch (error) {
+            }
+        } catch (error) {
     console.error(chalk.red('Error starting bot:'), error.message);
     if (error.stack) {
       console.error(chalk.gray(error.stack));

@@ -68,16 +68,16 @@ Before installation, you'll need to have these items ready:
    - Create initial wallets if needed
 
 4. Start the application:
-   ```bash
-   npm run labs
-   ```
+```bash
+npm run labs
+```
 
 ### Installation After Update
 
 If you're updating from a previous version:
 
 1. For the easiest update process, use our update scripts:
-   ```bash
+```bash
    # On macOS/Linux:
    ./update.sh
    
