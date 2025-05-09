@@ -39,10 +39,10 @@ export interface CommentPostResult {
 export declare function postComment(wallet: WalletData, tokenMint: string, comment: string, authResult?: PumpFunAuthResult, proxy?: ProxyConfig | string, options?: CommentPostingOptions): Promise<CommentPostResult>;
 /**
  * Check if comments are enabled for a token
- * @param tokenMint Token mint address
+ * @param tokenMint The token mint address to check
  * @param proxy Optional proxy to use
- * @param awsToken Optional AWS token for authenticated check
- * @param authToken Optional auth token for authenticated check
- * @returns True if comments are enabled
+ * @param awsToken Optional AWS token for authentication
+ * @param authToken Optional auth token for authentication
+ * @returns True if comments are enabled, false otherwise
  */
 export declare function checkCommentsEnabled(tokenMint: string, proxy?: ProxyConfig | string, awsToken?: string, authToken?: string): Promise<boolean>;

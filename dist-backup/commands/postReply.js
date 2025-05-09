@@ -87,39 +87,67 @@ async function postReplyCommand(options) {
     try {
         // Get options interactively if not provided
         let { path: walletPath, tokenMint, comment, useAi, randomize, shillMode, preferredMethod, likeMode, likeCount, useProxy } = options;
-        // Check if proxy support is enabled in the environment
+        // Always enable proxies by default unless explicitly disabled
         if (useProxy === undefined) {
-            // Check environment variables first
-            useProxy = process.env.USE_PROXIES === 'true';
-            // If proxy support is available, ask the user if they want to use it
-            if (useProxy) {
-                const proxyManager = (0, proxyManager_1.getProxyManager)();
-                if (proxyManager.isEnabled()) {
-                    const proxyAnswer = await inquirer_1.default.prompt([
-                        {
-                            type: 'confirm',
-                            name: 'useProxy',
-                            message: 'Do you want to use residential proxies for comment posting?',
-                            default: true
-                        }
-                    ]);
-                    useProxy = proxyAnswer.useProxy;
-                    if (useProxy) {
-                        console.log(chalk_1.default.green('Proxy support is enabled for comment posting'));
-                        // Test proxy connection
-                        const testResult = await proxyManager.testProxy();
-                        if (testResult.success) {
-                            console.log(chalk_1.default.green(`✓ Proxy test successful: ${testResult.ip}`));
+            // Default to true
+            useProxy = true;
+            // Check environment variables as a potential override
+            if (process.env.USE_PROXIES === 'false') {
+                useProxy = false;
+            }
+        }
+        // Check that proxy manager is properly configured
+        if (useProxy) {
+            const proxyManager = (0, proxyManager_1.getProxyManager)();
+            if (proxyManager.isEnabled()) {
+                console.log(chalk_1.default.green('✓ Using Oxylabs residential proxies for more organic comment posting patterns'));
+                // Test proxy connection
+                try {
+                    const testResult = await proxyManager.testProxy();
+                    if (testResult.success) {
+                        console.log(chalk_1.default.green(`✓ Proxy test successful: ${testResult.ip}`));
+                    }
+                    else {
+                        console.log(chalk_1.default.yellow(`⚠️ Proxy test failed: ${testResult.message}`));
+                        // Ask if they want to try configuring proxies
+                        const setupAnswer = await inquirer_1.default.prompt([
+                            {
+                                type: 'confirm',
+                                name: 'setupProxy',
+                                message: 'Proxy test failed. Would you like to run proxy setup now?',
+                                default: true
+                            }
+                        ]);
+                        if (setupAnswer.setupProxy) {
+                            // Dynamically import and run the setup command
+                            try {
+                                const { setupProxyCommand } = await Promise.resolve().then(() => __importStar(require('./setupProxy')));
+                                await setupProxyCommand({
+                                    service: 'oxylabs' // Force Oxylabs as the only provider
+                                });
+                                // Test again after setup
+                                const retestResult = await proxyManager.testProxy();
+                                if (retestResult.success) {
+                                    console.log(chalk_1.default.green(`✓ Proxy setup successful! Connected via: ${retestResult.ip}`));
+                                    useProxy = true;
+                                }
+                                else {
+                                    console.log(chalk_1.default.yellow(`⚠️ Proxy setup failed. Continuing without proxies.`));
+                                    useProxy = false;
+                                }
+                            }
+                            catch (setupError) {
+                                console.log(chalk_1.default.red(`Error setting up proxies: ${setupError instanceof Error ? setupError.message : String(setupError)}`));
+                                useProxy = false;
+                            }
                         }
                         else {
-                            console.log(chalk_1.default.yellow(`⚠️ Proxy test failed: ${testResult.message}`));
-                            // Ask if they want to continue without proxy
                             const continueAnswer = await inquirer_1.default.prompt([
                                 {
                                     type: 'confirm',
                                     name: 'continueWithoutProxy',
-                                    message: 'Proxy test failed. Do you want to continue without proxy?',
-                                    default: true
+                                    message: 'Continue without proxy? (Not recommended - may encounter CAPTCHA)',
+                                    default: false
                                 }
                             ]);
                             if (continueAnswer.continueWithoutProxy) {
@@ -131,18 +159,65 @@ async function postReplyCommand(options) {
                         }
                     }
                 }
-                else {
-                    console.log(chalk_1.default.yellow('Proxy support is not properly configured. Using direct connection for optimal reliability.'));
+                catch (error) {
+                    console.log(chalk_1.default.yellow(`Error testing proxy: ${error instanceof Error ? error.message : String(error)}`));
                     useProxy = false;
                 }
             }
-        }
-        // Set the appropriate message based on proxy usage
-        if (useProxy) {
-            console.log(chalk_1.default.green('✓ Using residential proxies for more organic comment posting patterns'));
+            else {
+                console.log(chalk_1.default.yellow('Proxy support is not properly configured.'));
+                // Ask if they want to set up proxies
+                const setupAnswer = await inquirer_1.default.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'setupProxy',
+                        message: 'Would you like to set up Oxylabs proxies now? (Recommended to avoid CAPTCHA)',
+                        default: true
+                    }
+                ]);
+                if (setupAnswer.setupProxy) {
+                    // Dynamically import and run the setup command
+                    try {
+                        const { setupProxyCommand } = await Promise.resolve().then(() => __importStar(require('./setupProxy')));
+                        await setupProxyCommand({
+                            service: 'oxylabs' // Force Oxylabs as the only provider
+                        });
+                        // Test after setup
+                        const retestResult = await proxyManager.testProxy();
+                        if (retestResult.success) {
+                            console.log(chalk_1.default.green(`✓ Proxy setup successful! Connected via: ${retestResult.ip}`));
+                            useProxy = true;
+                        }
+                        else {
+                            console.log(chalk_1.default.yellow(`⚠️ Proxy setup failed. Continuing without proxies.`));
+                            useProxy = false;
+                        }
+                    }
+                    catch (setupError) {
+                        console.log(chalk_1.default.red(`Error setting up proxies: ${setupError instanceof Error ? setupError.message : String(setupError)}`));
+                        useProxy = false;
+                    }
+                }
+                else {
+                    const continueAnswer = await inquirer_1.default.prompt([
+                        {
+                            type: 'confirm',
+                            name: 'continueWithoutProxy',
+                            message: 'Continue without proxy? (Not recommended - may encounter CAPTCHA)',
+                            default: false
+                        }
+                    ]);
+                    if (continueAnswer.continueWithoutProxy) {
+                        useProxy = false;
+                    }
+                    else {
+                        return; // Exit if they don't want to continue
+                    }
+                }
+            }
         }
         else {
-            console.log(chalk_1.default.green('✓ Using direct connection for optimal reliability'));
+            console.log(chalk_1.default.red('⚠️ Running without proxies. Comments may fail due to CAPTCHA protection.'));
         }
         if (!walletPath) {
             // Get project root directory
@@ -969,6 +1044,10 @@ async function getExistingReplies(tokenMint, proxy) {
 async function postCommentWithApi(wallet, tokenMint, comment, proxy, likeMode = false, likeCount = 0, withImage = false) {
     console.log(chalk_1.default.cyan(`Posting comment via pump.fun API...`));
     try {
+        // Ensure proxy has a session ID if it's an object
+        if (proxy && typeof proxy === 'object' && !proxy.sessionId) {
+            proxy.sessionId = `comment-${wallet.publicKey.substring(0, 8)}-${Math.floor(Math.random() * 1000000)}`;
+        }
         // First authenticate with the service - this now returns both authToken and awsToken
         const authResult = await (0, PumpFunWrapper_1.enhancedAuthenticate)(wallet, proxy);
         if (!authResult) {
@@ -1036,8 +1115,14 @@ async function postReplies(wallets, tokenMint, apiKey, options) {
         let proxyForCheck = undefined;
         if (useProxies && proxyManager && proxyManager.isEnabled()) {
             // Get config for checking with proxy
-            proxyForCheck = proxyManager.getAxiosConfig();
-            console.log(chalk_1.default.green('Using proxy for API availability check'));
+            try {
+                proxyForCheck = proxyManager.getAxiosConfig();
+                console.log(chalk_1.default.green('Using Oxylabs proxy for API availability check'));
+            }
+            catch (error) {
+                console.log(chalk_1.default.yellow(`Error getting proxy configuration: ${error instanceof Error ? error.message : String(error)}`));
+                proxyForCheck = undefined;
+            }
         }
         // Try first without proxy
         try {
@@ -1155,8 +1240,15 @@ async function postReplies(wallets, tokenMint, apiKey, options) {
         const walletSessionId = `comment-${wallet.publicKey.substring(0, 8)}`;
         if (useProxies && proxyManager && proxyManager.isEnabled()) {
             // Get a proxy config for this wallet's session
-            console.log(chalk_1.default.cyan(`Setting up proxy for wallet ${i + 1}/${wallets.length} with session ID: ${walletSessionId}`));
-            proxyConfig = { useProxy: true, sessionId: walletSessionId };
+            console.log(chalk_1.default.cyan(`Setting up Oxylabs proxy for wallet ${i + 1}/${wallets.length} with session ID: ${walletSessionId}`));
+            try {
+                proxyConfig = proxyManager.getAxiosConfig('US', undefined, walletSessionId);
+            }
+            catch (error) {
+                console.log(chalk_1.default.red(`Error creating proxy config: ${error instanceof Error ? error.message : String(error)}`));
+                // Fall back to simple boolean flag
+                proxyConfig = { useProxy: true, sessionId: walletSessionId };
+            }
         }
         spinner.text = `Processing wallet ${i + 1}/${wallets.length}: ${wallet.publicKey.substring(0, 8)}...`;
         // Post multiple comments per wallet if requested

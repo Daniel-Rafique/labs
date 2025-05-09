@@ -32,16 +32,43 @@ dotenv.config();
 // ASCII Art banner
 function showBanner() {
   console.clear();
-  console.log(
-    chalk.cyan(
-      figlet.textSync('LABS', {
-        font: 'Standard',
-        horizontalLayout: 'default',
-        verticalLayout: 'default',
-      })
-    )
-  );
-  console.log(chalk.cyan('Live AI Based Strategy by Koynlabs\n'));
+  
+  // Create a purple gradient for 3D effect
+  const purpleShades = [
+    '#9932CC', // Dark purple
+    '#BA55D3', // Medium purple
+    '#D8BFD8', // Thistle
+  ];
+  
+  // Get the figlet text for LABS with ANSI Shadow font (cleaner 3D look)
+  const labsText = figlet.textSync('LABS', {
+    font: 'ANSI Shadow',
+    horizontalLayout: 'default',
+    verticalLayout: 'default',
+  });
+  
+  // Split the LABS text into lines
+  const labsLines = labsText.split('\n');
+  
+  console.log(''); // Add some spacing
+  
+  // Apply color gradient to each line for 3D appearance
+  for (let i = 0; i < labsLines.length; i++) {
+    const textLine = labsLines[i];
+    
+    // Create a color gradient effect for 3D appearance
+    let coloredLine = '';
+    for (let c = 0; c < textLine.length; c++) {
+      const char = textLine[c];
+      const colorIndex = Math.min(Math.floor(c / (textLine.length / purpleShades.length)), purpleShades.length - 1);
+      coloredLine += chalk.hex(purpleShades[colorIndex])(char);
+    }
+    
+    console.log(coloredLine);
+  }
+  
+  console.log('');
+  console.log(chalk.hex('#BA55D3')('Live AI Based Strategy by @koynlabs\n'));
 }
 
 // Validate configuration before proceeding

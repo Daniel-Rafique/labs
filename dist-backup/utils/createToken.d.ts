@@ -8,15 +8,15 @@ interface TokenCreationOptions {
     website?: string;
     initialBuys: number;
     creatorWalletIndex: number;
-    useProxy?: boolean;
 }
 interface TokenCreationResult {
     success: boolean;
     mintAddress?: string;
     error?: string;
+    transactions?: string[];
 }
 /**
- * Create token on pump.fun
+ * Create token on pump.fun using the pumpportal.fun API
  * @param options Token creation options
  * @returns Result object with success status and mint address or error
  */

@@ -32,7 +32,7 @@ export declare function hideProxyCredentials(proxyUrl: string): string;
  * @param proxy Optional proxy configuration to use
  * @returns Configured Axios instance
  */
-export declare function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance;
+export declare function createAxiosInstance(proxy?: ProxyConfig | string | any): AxiosInstance;
 /**
  * Interface for wallet data
  */

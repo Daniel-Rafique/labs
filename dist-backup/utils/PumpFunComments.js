@@ -30,7 +30,13 @@ const CAPTCHA_SCORE_ENDPOINT = "/captcha-score";
  * @returns Result of the comment posting operation
  */
 async function postComment(wallet, tokenMint, comment, authResult, proxy, options = {}) {
-    console.log(chalk_1.default.cyan(`Posting comment via pump.fun API...`));
+    // Log whether we're using a proxy
+    if (proxy) {
+        console.log(chalk_1.default.cyan(`Posting comment via pump.fun API using proxy...`));
+    }
+    else {
+        console.log(chalk_1.default.cyan(`Posting comment via pump.fun API without proxy...`));
+    }
     // Default options
     const { maxRetries = 3, timeoutSeconds = 30, simulateBrowsing = true, randomizeDelay = true, imageUrl = undefined } = options;
     // Validate token mint
@@ -414,14 +420,22 @@ async function postCommentWithRetries(client, tokenMint, comment, authToken, aws
 }
 /**
  * Check if comments are enabled for a token
- * @param tokenMint Token mint address
+ * @param tokenMint The token mint address to check
  * @param proxy Optional proxy to use
- * @param awsToken Optional AWS token for authenticated check
- * @param authToken Optional auth token for authenticated check
- * @returns True if comments are enabled
+ * @param awsToken Optional AWS token for authentication
+ * @param authToken Optional auth token for authentication
+ * @returns True if comments are enabled, false otherwise
  */
 async function checkCommentsEnabled(tokenMint, proxy, awsToken, authToken) {
     try {
+        // Log whether we're using a proxy for this check
+        if (proxy) {
+            console.log(chalk_1.default.cyan(`Checking if comments are enabled for ${tokenMint} using proxy...`));
+        }
+        else {
+            console.log(chalk_1.default.cyan(`Checking if comments are enabled for ${tokenMint} without proxy...`));
+        }
+        // Create Axios client with proxy if provided
         const client = (0, PumpFunAuth_1.createAxiosInstance)(proxy);
         const headers = (0, PumpFunAuth_1.getBrowserLikeHeaders)();
         // Add authentication headers if provided

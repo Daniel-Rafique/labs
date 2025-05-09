@@ -78,6 +78,18 @@ async function startBotCommand(options) {
         console.log(chalk_1.default.green(`Wallet File: ${walletPath}`));
         console.log(chalk_1.default.green(`AI Optimization: ${useAi ? 'Enabled' : 'Disabled'}`));
         console.log(chalk_1.default.green(`Proxy Support: ${useProxies ? 'Enabled' : 'Disabled'}`));
+        // If AI optimization is enabled, show recommended wallet balance
+        if (useAi) {
+            const baseRecommendation = Math.max(parseFloat(minAmount) * 3, parseFloat(maxAmount) * 1.5);
+            const recommendedBalance = baseRecommendation * parseInt(numCycles);
+            console.log(chalk_1.default.yellow(`\nNOTE: With AI optimization enabled, recommended wallet balance is ${recommendedBalance.toFixed(4)} SOL`));
+            console.log(chalk_1.default.yellow(`      This calculation accounts for ${numCycles} cycles and potential liquidity changes.`));
+        }
+        else if (parseInt(numCycles) > 1) {
+            // Even without AI, show cycle-based recommendation for multiple cycles
+            const recommendedBalance = parseFloat(minAmount) * parseInt(numCycles);
+            console.log(chalk_1.default.yellow(`\nNOTE: For ${numCycles} cycles, recommended wallet balance is ${recommendedBalance.toFixed(4)} SOL`));
+        }
         console.log(chalk_1.default.cyan('==========================\n'));
         const confirm = await inquirer_1.default.prompt([
             {
@@ -108,22 +120,198 @@ async function startBotCommand(options) {
                     return;
                 }
             });
+            // Set up flag to track if we've shown the wallet balance error
+            let balanceErrorShown = false;
+            // Create a function to display the wallet balance error menu
+            const showWalletBalanceErrorMenu = (minRequired = minAmount, recommendedBalanceParam = null, cycles = numCycles) => {
+                if (balanceErrorShown)
+                    return; // Prevent showing multiple times
+                balanceErrorShown = true;
+                spinner.fail('Bot could not start due to insufficient wallet balance');
+                // Calculate recommended balance based on the current settings
+                const baseRecommendation = useAi
+                    ? Math.max(parseFloat(minAmount) * 3, parseFloat(maxAmount) * 1.5)
+                    : parseFloat(minAmount);
+                const calculatedRecommendation = baseRecommendation * parseInt(cycles);
+                // Use the provided recommendation if available, otherwise use our calculation
+                const displayRecommendation = recommendedBalanceParam ? parseFloat(recommendedBalanceParam) : calculatedRecommendation;
+                console.log(chalk_1.default.red('\n========================================'));
+                console.log(chalk_1.default.red('⚠️  INSUFFICIENT WALLET BALANCE DETECTED  ⚠️'));
+                console.log(chalk_1.default.red('========================================'));
+                console.log(chalk_1.default.yellow(`None of your wallets have sufficient SOL balance to trade.`));
+                // Show AI recommendation context if AI is enabled
+                if (useAi) {
+                    console.log(chalk_1.default.yellow(`\nRecommended balance with AI optimization for ${cycles} cycles: ${displayRecommendation.toFixed(4)} SOL per wallet`));
+                    console.log(chalk_1.default.yellow(`When using AI optimization, wallet balance requirements may change when liquidity changes.`));
+                }
+                else if (parseInt(cycles) > 1) {
+                    // Even without AI, show cycle-based recommendation
+                    console.log(chalk_1.default.yellow(`\nRecommended balance for ${cycles} cycles: ${displayRecommendation.toFixed(4)} SOL per wallet`));
+                }
+                console.log('');
+                // Stop the bot process since it can't continue
+                if (botProcess.pid) {
+                    try {
+                        process.kill(botProcess.pid);
+                    }
+                    catch (e) {
+                        // Ignore kill errors
+                    }
+                }
+                // Show interactive prompt for what to do next
+                inquirer_1.default.prompt([
+                    {
+                        type: 'list',
+                        name: 'action',
+                        message: 'What would you like to do?',
+                        choices: [
+                            { name: 'Distribute SOL between wallets', value: 'distribute' },
+                            { name: 'Return to main menu', value: 'menu' }
+                        ]
+                    }
+                ]).then(response => {
+                    if (response.action === 'distribute') {
+                        console.log(chalk_1.default.cyan('\nLaunching SOL distribution tool...\n'));
+                        // Import and run the distribute command
+                        Promise.resolve().then(() => __importStar(require('../commands/distribute'))).then(module => {
+                            module.distributeCommand({
+                                directory: directory || '.config',
+                                amount: '0.01' // Default minimal amount
+                            }).catch(err => {
+                                console.error(chalk_1.default.red(`\nError during SOL distribution: ${err.message}`));
+                            });
+                        });
+                    }
+                    else {
+                        console.log(chalk_1.default.cyan('\nReturning to main menu. Please fund your wallets and try again.'));
+                    }
+                });
+            };
+            // Function to check error log files for balance issues
+            const checkErrorLogs = () => {
+                try {
+                    // Check for special error log file
+                    const errorLogPath = path.join(projectRootDir, 'logs', 'wallet_error.log');
+                    if (fs.existsSync(errorLogPath)) {
+                        const logContent = fs.readFileSync(errorLogPath, 'utf8');
+                        // Check if log is from today
+                        const today = new Date().toISOString().slice(0, 10);
+                        if (logContent.includes(today) &&
+                            (logContent.includes('INSUFFICIENT_WALLET_BALANCE') ||
+                                logContent.includes('insufficient wallet balance'))) {
+                            // Try to extract the minimum amount
+                            const match = logContent.match(/Minimum required: ([0-9.]+) SOL/);
+                            const minRequired = match ? parseFloat(match[1]).toFixed(4) : minAmount;
+                            showWalletBalanceErrorMenu(minRequired);
+                            return true;
+                        }
+                    }
+                    // Check regular bot logs
+                    const logsDir = path.join(projectRootDir, 'logs');
+                    if (fs.existsSync(logsDir)) {
+                        const logFiles = fs.readdirSync(logsDir)
+                            .filter(file => file.startsWith('bot_'))
+                            .map(file => ({
+                            path: path.join(logsDir, file),
+                            mtime: fs.statSync(path.join(logsDir, file)).mtime.getTime()
+                        }))
+                            .sort((a, b) => b.mtime - a.mtime); // Most recent first
+                        if (logFiles.length > 0) {
+                            const recentLog = fs.readFileSync(logFiles[0].path, 'utf8');
+                            if (recentLog.includes('INSUFFICIENT_WALLET_BALANCE') ||
+                                recentLog.includes('insufficient wallet balance') ||
+                                recentLog.includes('WARNING: INSUFFICIENT WALLET BALANCE')) {
+                                // Try to extract the minimum amount
+                                const match = recentLog.match(/Minimum required: ([0-9.]+) SOL/);
+                                const minRequired = match ? parseFloat(match[1]).toFixed(4) : minAmount;
+                                showWalletBalanceErrorMenu(minRequired);
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+                catch (err) {
+                    console.error(chalk_1.default.gray('Error checking log files:'), err);
+                    return false;
+                }
+            };
             // Handle stdout data
             botProcess.stdout?.on('data', (data) => {
                 spinner.stop();
-                console.log(chalk_1.default.blue('[BOT]'), data.toString().trim());
+                const output = data.toString().trim();
+                // Check if this is the insufficient balance warning
+                if (output.includes('insufficient wallet balance') ||
+                    output.includes('INSUFFICIENT WALLET BALANCE') ||
+                    output.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    // Extract the minimum SOL requirement if possible
+                    const minMatch = output.match(/Minimum required: ([0-9.]+) SOL/);
+                    // For recommended value, check multiple patterns as the output format may vary
+                    const recMatch = output.match(/Recommended: ([0-9.]+) SOL/) ||
+                        output.match(/recommended balance is ([0-9.]+) SOL/) ||
+                        output.match(/recommended balance: ([0-9.]+) SOL/);
+                    const cyclesMatch = output.match(/([0-9]+) cycles/);
+                    const minRequired = minMatch ? minMatch[1] : minAmount;
+                    const recommendedBalance = recMatch ? recMatch[1] : null;
+                    const cycles = cyclesMatch ? cyclesMatch[1] : numCycles;
+                    showWalletBalanceErrorMenu(minRequired, recommendedBalance, cycles);
+                    return;
+                }
+                console.log(chalk_1.default.blue('[BOT]'), output);
             });
             // Handle stderr data
             botProcess.stderr?.on('data', (data) => {
                 spinner.stop();
-                console.error(chalk_1.default.red('[BOT ERROR]'), data.toString().trim());
+                const output = data.toString().trim();
+                // Check if this is the insufficient balance error in stderr
+                if (output.includes('insufficient wallet balance') ||
+                    output.includes('INSUFFICIENT WALLET BALANCE') ||
+                    output.includes('INSUFFICIENT_WALLET_BALANCE')) {
+                    // Extract the minimum SOL requirement if possible
+                    const minMatch = output.match(/Minimum required: ([0-9.]+) SOL/);
+                    // For recommended value, check multiple patterns as the output format may vary
+                    const recMatch = output.match(/Recommended: ([0-9.]+) SOL/) ||
+                        output.match(/recommended balance is ([0-9.]+) SOL/) ||
+                        output.match(/recommended balance: ([0-9.]+) SOL/);
+                    const cyclesMatch = output.match(/([0-9]+) cycles/);
+                    const minRequired = minMatch ? minMatch[1] : minAmount;
+                    const recommendedBalance = recMatch ? recMatch[1] : null;
+                    const cycles = cyclesMatch ? cyclesMatch[1] : numCycles;
+                    showWalletBalanceErrorMenu(minRequired, recommendedBalance, cycles);
+                    return;
+                }
+                console.error(chalk_1.default.red('[BOT ERROR]'), output);
             });
+            // Add an exit handler to check for error conditions
+            botProcess.on('exit', (code, signal) => {
+                // If the process exited with a non-zero code and we haven't already shown an error message
+                if (code !== 0 && !balanceErrorShown) {
+                    // Check for errors in log files
+                    if (!checkErrorLogs()) {
+                        spinner.fail(`Bot process exited with code ${code}`);
+                        console.log(chalk_1.default.yellow('\nThe bot exited unexpectedly. This could be due to insufficient wallet balance.'));
+                        console.log(chalk_1.default.yellow('Please check that your wallets have enough SOL and try again.'));
+                    }
+                }
+            });
+            // Set up periodic log checking
+            const logCheckInterval = setInterval(() => {
+                if (!balanceErrorShown) {
+                    checkErrorLogs();
+                }
+            }, 2000); // Check every 2 seconds
+            // Clear log check interval after 30 seconds
+            setTimeout(() => {
+                clearInterval(logCheckInterval);
+            }, 30000);
             // Notify user when bot has started
             setTimeout(() => {
-                spinner.succeed('Bot started successfully!');
-                console.log(chalk_1.default.green('\nBot is now running in the background.'));
-                console.log(chalk_1.default.yellow('Press Ctrl+C to stop the CLI, but the bot will continue running.'));
-                console.log(chalk_1.default.yellow('To stop the bot, you will need to terminate it manually using task manager or the kill command.'));
+                if (spinner.isSpinning && !balanceErrorShown) { // Only update if we haven't shown an error already
+                    spinner.succeed('Bot started successfully!');
+                    console.log(chalk_1.default.green('\nBot is now running in the background.'));
+                    console.log(chalk_1.default.yellow('Press Ctrl+C to stop the CLI, but the bot will continue running.'));
+                    console.log(chalk_1.default.yellow('To stop the bot, you will need to terminate it manually using task manager or the kill command.'));
+                }
             }, 3000);
         }
         catch (error) {
@@ -182,10 +370,127 @@ async function fetchTokenInfo(tokenAddress) {
 async function getAIRecommendedParams(tokenAddress, tokenInfo, jito) {
     const spinner = (0, ora_1.default)('Using AI to optimize trading parameters...').start();
     try {
+        // Determine liquidity tier and set appropriate parameters
+        let liquidity = tokenInfo.liquidity || 0;
+        let liquidityTier = 'unknown';
+        let maxAmount = '50';
+        let minAmount = '5';
+        let timeBetween = '300';
+        let numBuys = '10';
+        let numCycles = '5';
+        let reasoning = '';
+        // Apply liquidity-based parameter constraints
+        if (liquidity < 10) {
+            // Extremely low / no liquidity
+            spinner.text = 'Token has extremely low liquidity. Setting conservative parameters...';
+            maxAmount = '0.05';
+            minAmount = '0.01';
+            timeBetween = '3000';
+            numBuys = '3';
+            numCycles = '5';
+            liquidityTier = 'extremely low';
+            reasoning = `Given the extremely low liquidity of $${liquidity}, it's critical to use very small trade sizes to avoid price impact. The max trade amount of 0.05 SOL minimizes market disruption, while a time between buys of 3000ms prevents overwhelming the limited liquidity. Just 3 buys before selling reduces risk exposure in this illiquid environment.`;
+            spinner.succeed('AI trading parameter optimization complete');
+            return {
+                maxAmount,
+                minAmount,
+                timeBetween,
+                numBuys,
+                numCycles,
+                reasoning
+            };
+        }
+        else if (liquidity < 100) {
+            // Very low liquidity
+            spinner.text = 'Token has very low liquidity. Setting conservative parameters...';
+            maxAmount = '0.1';
+            minAmount = '0.02';
+            timeBetween = '2000';
+            numBuys = '3';
+            numCycles = '5';
+            liquidityTier = 'very low';
+            reasoning = `With very low liquidity of $${liquidity}, conservative parameters are necessary. A max trade size of 0.1 SOL prevents excessive price impact, while maintaining enough size to create visible chart patterns. The 2000ms interval between trades allows the market to absorb each trade, and limiting to 3 buys before selling manages risk appropriately in this limited liquidity environment.`;
+            spinner.succeed('AI trading parameter optimization complete');
+            return {
+                maxAmount,
+                minAmount,
+                timeBetween,
+                numBuys,
+                numCycles,
+                reasoning
+            };
+        }
+        else if (liquidity < 500) {
+            // Low liquidity
+            maxAmount = '0.5';
+            minAmount = '0.05';
+            timeBetween = '1500';
+            numBuys = '4';
+            liquidityTier = 'low';
+        }
+        else if (liquidity < 1000) {
+            // Moderately low liquidity
+            maxAmount = '1';
+            minAmount = '0.1';
+            timeBetween = '1200';
+            numBuys = '4';
+            liquidityTier = 'moderately low';
+        }
+        else if (liquidity < 5000) {
+            // Moderate liquidity
+            maxAmount = '5';
+            minAmount = '0.5';
+            timeBetween = '1000';
+            numBuys = '5';
+            liquidityTier = 'moderate';
+        }
+        else if (liquidity < 20000) {
+            // Good liquidity
+            maxAmount = '10';
+            minAmount = '1';
+            timeBetween = '800';
+            numBuys = '6';
+            liquidityTier = 'good';
+        }
+        else if (liquidity < 50000) {
+            // High liquidity
+            maxAmount = '20';
+            minAmount = '2';
+            timeBetween = '500';
+            numBuys = '8';
+            liquidityTier = 'high';
+        }
+        else if (liquidity < 200000) {
+            // Very high liquidity
+            maxAmount = '30';
+            minAmount = '3';
+            timeBetween = '300';
+            numBuys = '10';
+            liquidityTier = 'very high';
+        }
+        else {
+            // Extremely high liquidity
+            maxAmount = '50';
+            minAmount = '5';
+            timeBetween = '200';
+            numBuys = '10';
+            liquidityTier = 'extremely high';
+        }
+        // For moderate to high liquidity, still use AI for customization
         const openaiKey = process.env.OPENAI_API_KEY;
         if (!openaiKey) {
             spinner.fail('OpenAI API key not found. Please set OPENAI_API_KEY in your .env file.');
-            return null;
+            // Return the tier-based parameters even without AI
+            reasoning = `Based on the token's ${liquidityTier} liquidity ($${liquidity}), these parameters provide an optimal balance between generating volume and avoiding excessive price impact.`;
+            spinner.succeed('Parameter optimization complete based on liquidity tier');
+            return {
+                maxAmount,
+                minAmount,
+                timeBetween,
+                numBuys,
+                numCycles,
+                reasoning
+            };
         }
         const openai = new openai_1.default({
             apiKey: openaiKey
@@ -197,33 +502,35 @@ async function getAIRecommendedParams(tokenAddress, tokenInfo, jito) {
 
 Token: ${tokenDescription}
 ${tokenInfo.price ? `Current Price: $${tokenInfo.price}` : ''}
-${tokenInfo.liquidity ? `Liquidity: $${tokenInfo.liquidity}` : ''}
+Liquidity: $${liquidity}
+Liquidity Tier: ${liquidityTier}
 ${tokenInfo.volume24h ? `24h Volume: $${tokenInfo.volume24h}` : ''}
 ${tokenInfo.age ? `Token Age: ${tokenInfo.age} days` : ''}
 Trading Mode: ${jito ? 'JITO (MEV protection)' : 'Lightning/Bump (fastest execution)'}
 
-Based on these token characteristics, suggest optimal values for:
-1. Max Trade Amount (in SOL)
-2. Min Trade Amount (in SOL)
-3. Time Between Buys (in milliseconds)
-4. Number of Buys before selling
-5. Number of Cycles to perform
+IMPORTANT: This token has ${liquidityTier.toUpperCase()} LIQUIDITY ($${liquidity}). 
+Your recommendations MUST follow these constraints:
+1. Max Trade Amount: ${maxAmount} SOL (EXACTLY this value, don't change it)
+2. Min Trade Amount: ${minAmount} SOL (EXACTLY this value, don't change it)
+3. Time Between Buys: ${timeBetween}ms (EXACTLY this value, don't change it)
+4. Number of Buys before selling: ${numBuys} (EXACTLY this value, don't change it)
+5. Number of Cycles to perform: 5-10 (you can recommend within this range)
 
-For each parameter, provide a specific value (not a range) that is optimal for this token. Explain your reasoning for these recommendations.
+Explain why these parameters are optimal for a token with this liquidity level.
 
 Format your response as a JSON object with these fields:
 {
-  "maxAmount": "value",
-  "minAmount": "value",
-  "timeBetween": "value",
-  "numBuys": "value",
-  "numCycles": "value",
+  "maxAmount": "${maxAmount}",
+  "minAmount": "${minAmount}",
+  "timeBetween": "${timeBetween}",
+  "numBuys": "${numBuys}",
+  "numCycles": "5",
   "reasoning": "brief explanation"
 }`;
         const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
-                { role: "system", content: "You are an expert crypto trading bot optimizer that provides precise parameter recommendations based on token data." },
+                { role: "system", content: "You are an expert crypto trading bot optimizer that provides precise parameter recommendations based on token data. Your primary goal is to ensure parameters are appropriate for the token's liquidity level. NEVER change the values provided to you for maxAmount, minAmount, timeBetween, or numBuys." },
                 { role: "user", content: promptContent }
             ],
             temperature: 0.3,
@@ -232,16 +539,47 @@ Format your response as a JSON object with these fields:
         const content = response.choices[0].message.content;
         if (!content) {
             spinner.fail('Failed to get AI recommendations: Empty response');
-            return null;
+            // Return the tier-based parameters as fallback
+            reasoning = `Based on the token's ${liquidityTier} liquidity ($${liquidity}), these parameters provide an optimal balance between generating volume and avoiding excessive price impact.`;
+            spinner.succeed('Parameter optimization complete based on liquidity tier');
+            return {
+                maxAmount,
+                minAmount,
+                timeBetween,
+                numBuys,
+                numCycles,
+                reasoning
+            };
         }
         try {
             const recommendations = JSON.parse(content);
+            // Verify the AI didn't change our fixed parameters
+            if (recommendations.maxAmount !== maxAmount ||
+                recommendations.minAmount !== minAmount ||
+                recommendations.timeBetween !== timeBetween ||
+                recommendations.numBuys !== numBuys) {
+                console.log('AI altered constrained parameters. Using liquidity-based values instead.');
+                recommendations.maxAmount = maxAmount;
+                recommendations.minAmount = minAmount;
+                recommendations.timeBetween = timeBetween;
+                recommendations.numBuys = numBuys;
+            }
             spinner.succeed('AI trading parameter optimization complete');
             return recommendations;
         }
         catch (parseError) {
             spinner.fail(`Failed to parse AI recommendations: ${parseError}`);
-            return null;
+            // Return the tier-based parameters as fallback
+            reasoning = `Based on the token's ${liquidityTier} liquidity ($${liquidity}), these parameters provide an optimal balance between generating volume and avoiding excessive price impact.`;
+            spinner.succeed('Parameter optimization complete based on liquidity tier');
+            return {
+                maxAmount,
+                minAmount,
+                timeBetween,
+                numBuys,
+                numCycles,
+                reasoning
+            };
         }
     }
     catch (error) {

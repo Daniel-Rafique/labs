@@ -32,6 +32,13 @@ export declare function getAccountTokens(connection: Connection, ownerAddress: P
     decimals: number;
 }[]>;
 /**
+ * Check if a token mint is valid and exists on-chain
+ * @param connection - Solana connection
+ * @param tokenMint - Token mint public key to check
+ * @returns True if the mint is valid, false otherwise
+ */
+export declare function isValidTokenMint(connection: Connection, tokenMint: PublicKey): Promise<boolean>;
+/**
  * Send a bundled transaction from multiple source wallets to one destination wallet
  * Uses Jito's bundle API for atomic execution
  * @param connection - Solana connection

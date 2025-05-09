@@ -3,9 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendTransactionViaJito = exports.bundleTokenTransfersFromSubwallets = exports.sendBundleToMultipleWallets = exports.sendBundleFromMultipleWallets = exports.getAccountTokens = exports.transferSplToken = exports.transferSol = exports.sendTransactionWithReliableConfirmation = exports.sendTransactionWithRetry = exports.addPriorityFee = exports.sleep = void 0;
+exports.sendTransactionViaJito = exports.bundleTokenTransfersFromSubwallets = exports.sendBundleToMultipleWallets = exports.sendBundleFromMultipleWallets = exports.isValidTokenMint = exports.getAccountTokens = exports.transferSplToken = exports.transferSol = exports.sendTransactionWithReliableConfirmation = exports.sendTransactionWithRetry = exports.addPriorityFee = exports.sleep = void 0;
 const web3_js_1 = require("@solana/web3.js");
 const token_compat_1 = require("../lib/solana/token-compat");
+const spl_token_1 = require("@solana/spl-token");
 const axios_1 = __importDefault(require("axios"));
 const uuid_1 = require("uuid");
 const jito_1 = require("../constants/jito");
@@ -187,6 +188,11 @@ exports.transferSol = transferSol;
  * Transfer SPL token from one wallet to another
  */
 async function transferSplToken(connection, fromWallet, toWallet, tokenMint, amount) {
+    // Validate the token mint first
+    const isValidMint = await isValidTokenMint(connection, tokenMint);
+    if (!isValidMint) {
+        throw new Error(`Invalid token mint: ${tokenMint.toString()}`);
+    }
     // Get or create associated token accounts
     const fromTokenAccount = await (0, token_compat_1.getOrCreateAssociatedTokenAccount)(connection, fromWallet, tokenMint, fromWallet.publicKey);
     const toTokenAccount = await (0, token_compat_1.getOrCreateAssociatedTokenAccount)(connection, fromWallet, tokenMint, toWallet);
@@ -208,20 +214,29 @@ async function getAccountTokens(connection, ownerAddress) {
     for (const programId of [token_compat_1.TOKEN_PROGRAM_ID, token_compat_1.TOKEN_2022_PROGRAM_ID]) {
         try {
             const tokenAccounts = await connection.getTokenAccountsByOwner(ownerAddress, { programId });
-            for (const { pubkey } of tokenAccounts.value) {
+            for (const { pubkey, account } of tokenAccounts.value) {
                 try {
                     // Get the token account balance
                     const accountInfo = await connection.getTokenAccountBalance(pubkey);
                     if (accountInfo && Number(accountInfo.value.amount) > 0) {
+                        // Parse the token account data to get the mint address
+                        const accountData = spl_token_1.AccountLayout.decode(account.data);
+                        const mintAddress = new web3_js_1.PublicKey(accountData.mint);
+                        // Validate the mint is still valid
+                        const isValidMint = await isValidTokenMint(connection, mintAddress);
+                        if (!isValidMint) {
+                            console.log(`Skipping invalid mint: ${mintAddress.toString()}`);
+                            continue;
+                        }
                         tokens.push({
-                            mint: pubkey.toString(), // We don't have the mint address, just use the token account address
+                            mint: mintAddress.toString(),
                             amount: Number(accountInfo.value.amount),
                             decimals: accountInfo.value.decimals
                         });
                     }
                 }
                 catch (error) {
-                    console.error(`Error getting token account info: ${error}`);
+                    console.error(`Error getting token account info for ${pubkey.toString()}: ${error}`);
                 }
             }
         }
@@ -232,6 +247,38 @@ async function getAccountTokens(connection, ownerAddress) {
     return tokens;
 }
 exports.getAccountTokens = getAccountTokens;
+/**
+ * Check if a token mint is valid and exists on-chain
+ * @param connection - Solana connection
+ * @param tokenMint - Token mint public key to check
+ * @returns True if the mint is valid, false otherwise
+ */
+async function isValidTokenMint(connection, tokenMint) {
+    try {
+        // Try to get the mint info - this will throw an error if the mint doesn't exist
+        const mintInfo = await connection.getAccountInfo(tokenMint);
+        // If null or doesn't exist, it's not a valid mint
+        if (!mintInfo) {
+            return false;
+        }
+        // Check if it's owned by the Token Program (either legacy or Token-2022)
+        if (!mintInfo.owner.equals(token_compat_1.TOKEN_PROGRAM_ID) &&
+            !mintInfo.owner.equals(token_compat_1.TOKEN_2022_PROGRAM_ID)) {
+            return false;
+        }
+        // Check minimum data length for a mint account
+        // A token mint account should have a minimum data length
+        if (mintInfo.data.length < 82) {
+            return false;
+        }
+        return true;
+    }
+    catch (error) {
+        console.log(`Error validating token mint ${tokenMint.toString()}: ${error}`);
+        return false;
+    }
+}
+exports.isValidTokenMint = isValidTokenMint;
 /**
  * Send a bundled transaction from multiple source wallets to one destination wallet
  * Uses Jito's bundle API for atomic execution
@@ -596,6 +643,14 @@ async function bundleTokenTransfersFromSubwallets(connection, sourceWallets, des
                 const tokenMint = batchMints[i];
                 const amount = batchAmounts[i];
                 try {
+                    // First validate the token mint before proceeding
+                    const isValidMint = await isValidTokenMint(connection, tokenMint);
+                    if (!isValidMint) {
+                        const errorMsg = `Invalid token mint: ${tokenMint.toString()}`;
+                        console.error(errorMsg);
+                        errors.push(errorMsg);
+                        continue;
+                    }
                     // Get source token account
                     const sourceTokenAccount = await (0, token_compat_1.getOrCreateAssociatedTokenAccount)(connection, sourceWallet, tokenMint, sourceWallet.publicKey);
                     // Get destination token account

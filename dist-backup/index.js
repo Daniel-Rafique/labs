@@ -110,12 +110,35 @@ dotenv_1.default.config();
 // ASCII Art banner
 function showBanner() {
     console.clear();
-    console.log(chalk_1.default.cyan(figlet_1.default.textSync('LABS', {
-        font: 'Standard',
+    // Create a purple gradient for 3D effect
+    const purpleShades = [
+        '#9932CC', // Dark purple
+        '#BA55D3', // Medium purple
+        '#D8BFD8', // Thistle
+    ];
+    // Get the figlet text for LABS with ANSI Shadow font (cleaner 3D look)
+    const labsText = figlet_1.default.textSync('LABS', {
+        font: 'ANSI Shadow',
         horizontalLayout: 'default',
         verticalLayout: 'default',
-    })));
-    console.log(chalk_1.default.cyan('Live AI Based Strategy by Koynlabs\n'));
+    });
+    // Split the LABS text into lines
+    const labsLines = labsText.split('\n');
+    console.log(''); // Add some spacing
+    // Apply color gradient to each line for 3D appearance
+    for (let i = 0; i < labsLines.length; i++) {
+        const textLine = labsLines[i];
+        // Create a color gradient effect for 3D appearance
+        let coloredLine = '';
+        for (let c = 0; c < textLine.length; c++) {
+            const char = textLine[c];
+            const colorIndex = Math.min(Math.floor(c / (textLine.length / purpleShades.length)), purpleShades.length - 1);
+            coloredLine += chalk_1.default.hex(purpleShades[colorIndex])(char);
+        }
+        console.log(coloredLine);
+    }
+    console.log('');
+    console.log(chalk_1.default.hex('#BA55D3')('Live AI Based Strategy by @koynlabs\n'));
 }
 // Validate configuration before proceeding
 async function checkConfiguration() {
@@ -210,13 +233,13 @@ async function showMainMenu() {
                 message: 'Select an action:',
                 pageSize: 14, // Increased to show all options
                 choices: [
-                    { name: 'Create Wallets', value: 'create-wallets' },
-                    { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
-                    { name: 'Wallet Monitor', value: 'wallet-monitor' },
-                    { name: 'Check Balances', value: 'check-balances' },
                     { name: 'Start Bot', value: 'start-bot' },
                     { name: 'Stop Bot', value: 'stop-bot' },
-                    { name: 'Distribute SOL', value: 'distribute' },
+                    { name: chalk_1.default.yellowBright('Distribute SOL') + chalk_1.default.gray(' (required for bot detection avoidance)'), value: 'distribute' },
+                    { name: 'Create Wallets', value: 'create-wallets' },
+                    { name: 'Wallet Dashboard', value: 'wallet-dashboard' },
+                    { name: 'Check Balances', value: 'check-balances' },
+                    { name: 'Wallet Monitor', value: 'wallet-monitor' },
                     { name: 'Dust Collection', value: 'dust' },
                     { name: 'Create Profiles', value: 'create-profiles' },
                     { name: 'Post PumpFun Replies', value: 'post-replies' },
@@ -229,7 +252,7 @@ async function showMainMenu() {
             }
         ]);
         if (action === 'quit') {
-            console.log(chalk_1.default.green('Thank you for using Koynlabs. Goodbye!'));
+            console.log(chalk_1.default.green('Thank you for using LABS. Goodbye!'));
             process.exit(0);
         }
         // Handle selected action
@@ -381,78 +404,67 @@ async function handleCheckBalances() {
 }
 // Handle distribute action
 async function handleDistribute() {
-    console.clear();
     showBanner();
-    console.log(chalk_1.default.cyan('== Distribute SOL ==\n'));
-    // Distribute menu loop
-    while (true) {
-        const { action } = await inquirer_1.default.prompt([
+    console.log(chalk_1.default.cyan('== Distribute SOL =='));
+    console.log(chalk_1.default.yellow('This command helps distribute SOL from one source wallet to multiple destination wallets.'));
+    console.log(chalk_1.default.yellow('Having 3-5 funded wallets is essential for bot detection avoidance.'));
+    console.log(chalk_1.default.yellow('The bot will rotate between these wallets to make trading patterns look more organic.'));
+    console.log();
+    // Ask for distribution options
+    const { directory, amount, privacy, batch } = await inquirer_1.default.prompt([
+        {
+            type: 'input',
+            name: 'directory',
+            message: 'Enter wallet directory path (default is .config):',
+            default: '.config'
+        },
+        {
+            type: 'input',
+            name: 'amount',
+            message: 'Enter SOL amount to distribute to each wallet:',
+            default: '0.01'
+        },
+        {
+            type: 'confirm',
+            name: 'privacy',
+            message: 'Enable privacy features to avoid transaction tracking?',
+            default: true
+        },
+        {
+            type: 'confirm',
+            name: 'batch',
+            message: 'Use batch transfers for faster distribution?',
+            default: false
+        }
+    ]);
+    try {
+        // Run the distribute command
+        await (0, distribute_1.distributeCommand)({
+            directory,
+            amount,
+            privacy,
+            batch
+        });
+        console.log(chalk_1.default.green('\nDistribution completed successfully!'));
+        console.log(chalk_1.default.cyan('Bot detection avoidance is now enhanced with multiple funded wallets.'));
+        // Ask if they want to start the bot now
+        const { startBot } = await inquirer_1.default.prompt([
             {
-                type: 'list',
-                name: 'action',
-                message: 'Distribute SOL Options:',
-                choices: [
-                    { name: 'Batch Distribution (Source → Multiple Recipients)', value: 'batch' },
-                    { name: 'Single Transfer (Source → One Recipient)', value: 'advanced' },
-                    { name: 'Back to Main Menu', value: 'back' }
-                ]
+                type: 'confirm',
+                name: 'startBot',
+                message: 'Do you want to start the bot now with your distributed wallets?',
+                default: false
             }
         ]);
-        if (action === 'back') {
-            return;
-        }
-        if (action === 'batch') {
-            // Batch distribution
-            const { amount } = await inquirer_1.default.prompt([
-                {
-                    type: 'input',
-                    name: 'amount',
-                    message: 'How much SOL to distribute to each wallet?',
-                    default: '0.05',
-                    validate: (input) => {
-                        const num = parseFloat(input);
-                        return !isNaN(num) && num > 0 ? true : 'Please enter a valid positive number';
-                    }
-                }
-            ]);
-            await (0, distribute_1.distributeCommand)({ directory: '.config', amount });
-        }
-        else {
-            // Single recipient transfer
-            const { amount } = await inquirer_1.default.prompt([
-                {
-                    type: 'input',
-                    name: 'amount',
-                    message: 'Enter amount to transfer:',
-                    validate: (input) => {
-                        const num = parseFloat(input);
-                        return !isNaN(num) && num > 0 ? true : 'Please enter a valid positive number';
-                    }
-                }
-            ]);
-            // Pass false for split since this is single recipient mode
-            await (0, transfer_1.transferCommand)({
-                directory: '.config',
-                amount,
-                split: false
-            });
-        }
-        // Ask if user wants to distribute more funds or return to menu
-        const { nextAction } = await inquirer_1.default.prompt([
-            {
-                type: 'list',
-                name: 'nextAction',
-                message: 'What would you like to do next?',
-                choices: [
-                    { name: 'Make Another Transfer', value: 'more' },
-                    { name: 'Back to Main Menu', value: 'back' }
-                ]
-            }
-        ]);
-        if (nextAction === 'back') {
-            return;
+        if (startBot) {
+            await handleStartBot();
         }
     }
+    catch (error) {
+        console.error(chalk_1.default.red(`Error: ${error.message}`));
+    }
+    // Return to main menu
+    return;
 }
 // Handle dust collection action
 async function handleDust() {

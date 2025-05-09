@@ -7,7 +7,6 @@ interface CreateTokenCommandOptions {
     telegram?: string;
     website?: string;
     buys?: string;
-    useProxy?: boolean;
 }
 export declare function createTokenCommand(options: CreateTokenCommandOptions): Promise<void>;
 export {};

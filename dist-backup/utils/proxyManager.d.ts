@@ -11,7 +11,7 @@ interface ProxyConfig {
 }
 /**
  * Proxy Manager to handle residential proxies
- * Supports Oxylabs and other proxy providers
+ * Optimized for Oxylabs residential proxies
  */
 export declare class ProxyManager {
     private proxyConfigs;
@@ -87,6 +87,25 @@ export declare class ProxyManager {
      * Keeps rotating proxies until a fresh IP is found
      */
     ensureFreshIp(identifier?: string, maxAttempts?: number): Promise<boolean>;
+    /**
+     * Get statistics about proxy usage for reporting
+     */
+    getProxyStats(): Array<{
+        url: string;
+        successCount?: number;
+        failureCount?: number;
+        isBanned?: boolean;
+        cooldownUntil?: number;
+    }>;
 }
+/**
+ * Generate natural-looking session parameters for proxy connections
+ * Randomizes session ID and duration to make connections appear more organic
+ */
+export declare function generateSessionParams(minDuration?: number, maxDuration?: number): {
+    sessionId: string;
+    sessionTime: number;
+    formattedString: string;
+};
 export declare function getProxyManager(): ProxyManager;
 export {};
