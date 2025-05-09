@@ -1,439 +1,337 @@
-# 🚀 Solana Advanced Trading Framework 🤖
+# Labs Volume Bot
 
-A high-performance, multi-threaded framework for advanced trading on Solana DEXes, featuring sniping, copytrading, and limit orders. This bot utilizes the Solana Swap API from BloxRoute [https://bloxroute.com/](https://bloxroute.com/)
-
-## ✨ Features
-
-- 🏦 Supports multiple DEXes:
-  - Raydium
-  - Raydium CPMM
-  - Pump.fun
-  - Jupiter (Private Self-Hosted API)
-- 👛 Multi-wallet support
-- 🚄 Parallel execution with multiple threads
-- ⏱️ Configurable delays for buying and selling
-- 🔄 Option to use regular transactions or Jito for transaction processing
-- 📊 Detailed logging with timestamps and color-coded actions
-- 🎯 Sniper for new token launches:
-  - Raydium
-  - Pump.fun
-- ⚡ Lightning-fast copytrading
-- 📈 Limit orders for USDC to SOL trading
-- 📊 Volume generation capabilities
-
-## 🛠️ Prerequisites
-
-- Node.js (v14 or later recommended)
-- npm (comes with Node.js)
-- PM2 (install globally with `npm install -g pm2`)
-- One or multiple Solana wallets with SOL
-
-## 🔧 Installation & Setup
-
-1. Clone the repository:
-   git clone https://github.com/Daniel-Rafique/solana-market-maker
-   cd solana-market-maker
-
-2. Install dependencies:
-   npm install
-
-3. Make the instance creation script executable:
-   chmod +x copyInstance.sh
-
-4. Create instances:
-   ./copyInstance.sh
-
-This will create the following trading instances:
-
-- copytrade
-- pumpfun
-- moonshot
-- ray
-
-3. Create a `.env` file in the root directory and add your configuration:
-   - `AMOUNT=0.1`
-   - `TOKEN_ADDRESS=your_token_address`
-   - `DELAY=2000`
-   - `SELL_DELAY=1000`
-   - `SLIPPAGE=1`
-   - `PRIORITY_FEE=0.0005`
-   - `JITO=false`
-   - `RPC_URL=your_rpc_url`
-   - `THREADS=2`
-
-## 🚀 Usage
-
-Run the bot with:
-
-npm start
-
-To use specific features, use the following settings in your `.env` file:
-
-- 🎯 Sniping: `TRADE_TYPE=pumpfun || TRADE_TYPE=raydium`
-- ⚡ Copytrading: `TRADE_TYPE=copytrade`
-- 📈 Limit orders: `TRADE_TYPE=sol_spl || TRADE_TYPE=usdc_sol`
-
-## ⚙️ Configuration
-
-Adjust the settings in your `.env` file to customize the bot's behavior:
-
-- AMOUNT: The amount of SOL to swap in each transaction
-- TOKEN_ADDRESS: The address of the token you're trading
-- DELAY: Delay between swap cycles (in milliseconds)
-- SELL_DELAY: Delay between buy and sell operations (in milliseconds)
-- SLIPPAGE: Maximum allowed slippage (in percentage)
-- PRIORITY_FEE: Priority fee for transactions
-- JITO: Set to "true" to use Jito for transaction processing
-- RPC_URL: Your Solana RPC URL
-- THREADS: Number of parallel threads to run
-
-### 🎯 Pump Detection Parameters
-
-- MIN_BUY_VOLUME_USD: Minimum trading volume in USD
-- MINIMUM_BUY_RATIO: Required buy vs total volume ratio (e.g., 0.95 for 95% buys)
-- MAXIMUM_SELLERS: Maximum allowed sellers during pump detection
-- MINIMUM_TRADES: Minimum number of trades required for pump detection
-
-### Other Settings
-
-- SNIPER_TARGETS: Addresses of new tokens to snipe (comma-separated)
-- COPYTRADE_WALLETS: Addresses of wallets to copy trades from (comma-separated)
-- LIMIT_ORDER_PRICE: Price at which to execute USDC to SOL limit orders
-- TRADE_TYPE: Type of trade to execute (pumpfun, copytrade, sol_spl, usdc_sol)
-
-## 💰 API Usage and Fees
-
-This bot uses the Solana Swap API from [https://bloxroute.com//](https://bloxroute.com/).
-
-**Note**: The Swap API charges a fee for usage:
-
-- Standard fee: 0.5% on each successful transaction
-- For high-volume users: Fees can be reduced to as low as 0.1% (subject to approval)
-
-For high-volume usage or inquiries about reduced fees, please contact:
-
-- 💬 Discord: [koynlabs Discord](https://discord.gg/JH2e9rR9fc)
-- 📧 Email: koynlabs@gmail.com
-
-## ⚠️ Disclaimer
-
-This bot is for educational and research purposes only. We do not recommend the use of trading bots or engage in market manipulation. Use at your own risk. Always understand the code you're running and the potential financial and legal implications of automated trading.
-
-## 📜 License
-
-[MIT License](LICENSE)
-
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/Daniel-Rafique/solana-market-maker/issues).
-
-## 🌟 Support
-
-If you like this project, please consider giving it a ⭐️ on GitHub!
-
-# Koyn Labs - Solana Trading Tool
-
-A high-performance, multi-threaded framework for advanced trading on Solana DEXes, featuring wallet management, balance monitoring, and portfolio tracking.
+A Solana automation tool for managing volume and engagement on pump.fun with AI-enhanced trading optimization and residential proxy support.
 
 ## Features
 
-### Wallet Management
-- Create and manage Solana wallets
-- Support for Lightning/Bump mode and JITO mode
-- Wallet file storage in `.config` directory by default
+- **PumpFun Integration**: Automate interactions with pump.fun
+- **Comment Management**: Post replies and manage engagement automatically
+- **Volume Generation**: Create realistic trading volume patterns
+- **Multi-Wallet Support**: Create and manage multiple Solana wallets
+- **Token Monitoring**: Track new tokens and price movements
+- **Automatic Transfers**: Efficiently move funds between wallets
+- **Dust Collection**: Gather small balances from multiple wallets
+- **Token Creation**: Create and launch tokens on pump.fun using your existing wallets
+- **AI-Enhanced Trading**: Optimize trading parameters using real-time market analysis
+- **Adaptive Parameters**: Automatically adjust trade amounts, timing, and strategies based on token metrics
+- **Market Analytics**: Fetch and analyze token liquidity, price, and volume data
+- **Performance Tracking**: Save optimization data for historical analysis
+- **Residential Proxies**: Route trades through different IPs for more organic trading patterns
+  - Geographic distribution across multiple countries
+  - Consistent IP identity per wallet
+  - Automatic IP rotation and freshness tracking
+  - Oxylabs integration
 
-### Balance & Portfolio Tools
-- **NEW!** Wallet Dashboard - View comprehensive summary of all your wallets
-- **NEW!** Wallet Monitor - Real-time monitoring of wallet balance changes
-- Check SOL and token balances across multiple wallets
-- Export wallet data to CSV for further analysis
+## Requirements
 
-### Fund Management
-- Distribute SOL to multiple wallets
-- Transfer SOL and tokens between wallets
-- Dust collection with token selling capabilities
+Before installation, you'll need to have these items ready:
 
-### Profile Management
-- Create PumpFun profiles for wallets
+1. **Solana RPC URL** - A dedicated or public RPC endpoint for Solana
+   - Example: `https://api.mainnet-beta.solana.com`
+   - For better performance, consider a paid RPC provider like QuickNode or Helius
 
-## Usage
+2. **OpenAI API Key** - Required for AI-driven content generation and trading parameter optimization
+   - Get one from [OpenAI Platform](https://platform.openai.com/api-keys)
 
-### Interactive Menu
-The easiest way to use Koyn Labs is via the interactive menu:
+3. **License Key** - Valid license for this software
+   - Contact support@koynlabs.com to obtain a license key
+   - A trial license can be generated during installation
 
-```bash
-npm run labs
-```
+4. **Proxy Service** (Optional but Recommended) - For residential IP rotation
+   - Supported providers: Oxylabs residential proxies
+   - Makes trading appear more organic with different IP addresses
+   - Prevents platform detection of multiple trades from same IP
+   - Avoids rate limiting and anti-bot measures
 
-This will present you with a user-friendly menu to access all features.
+## Installation
 
-### Command Line Interface
+### Fresh Installation
 
-You can also use the command line interface:
+1. Download and extract the ZIP package to a directory of your choice
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+   or use the provided installation scripts:
+   ```bash
+   # On macOS/Linux:
+   ./install.sh
+   
+   # On Windows:
+   install.bat
+   ```
 
-```bash
-# Create wallets
-npm run labs:cmd create-wallets -n 5
+3. During first-time installation, you will be guided through the setup process:
+   - Enter your Solana RPC URL
+   - Provide your OpenAI API key
+   - Enter your license key (or generate a trial)
+   - Create initial wallets if needed
 
-# View wallet dashboard
-npm run dashboard
+4. Start the application:
+   ```bash
+   npm run labs
+   ```
 
-# Monitor wallet balances for changes
-npm run monitor -i 30 -t 5 -u 120
+### Installation After Update
 
-# Check balances
-npm run labs:cmd check-balances -t
+If you're updating from a previous version:
 
-# Distribute SOL
-npm run labs:cmd distribute -a 0.05
+1. For the easiest update process, use our update scripts:
+   ```bash
+   # On macOS/Linux:
+   ./update.sh
+   
+   # On Windows:
+   update.bat
+   ```
+   These scripts will:
+   - Backup your current configuration
+   - Extract the new version
+   - Copy your settings to the new version
+   - Install dependencies
+   - Replace the old version with the new one
 
-# Collect dust
-npm run labs:cmd dust -a 0.001
-```
+2. Alternatively, you can manually update:
+   - Download and extract the new ZIP package to a new directory
+   - Copy your `.env` and `.config` directory from your old installation to the new installation directory
+   - Install dependencies with `npm install`
+   - Start the application with `npm run labs`
 
 ## Configuration
 
-The application uses a `.env` file for configuration. A template is provided in `.env-template`.
+The application uses a `.env` file for configuration. You can edit this file directly if needed:
 
-## Wallet Modes
-
-The application supports two wallet modes:
-
-1. **JITO Mode** - Standard wallet functionality
-2. **Lightning/Bump Mode** - Enhanced functionality with API key integration
-
-## New Features (v1.1.0)
-
-### Wallet Dashboard
-An at-a-glance view of your wallet portfolio showing:
-- Total and average SOL balances across all wallets
-- Token holdings summary
-- Top wallets by balance
-- SOL balance distribution chart
-- CSV export for external analysis
-
-### Wallet Monitor
-Real-time monitoring of your wallets:
-- Define custom check intervals
-- Set alert thresholds for balance changes
-- Monitor for new tokens or removed tokens
-- Configurable monitoring duration
-
-## Post Replies Feature
-
-The Post Replies feature allows you to automatically post comments on any Pump.fun token thread using your wallets. This can be useful for:
-
-- Increasing engagement on your token's thread
-- Participating in community discussions
-- Supporting projects you like
-
-### Key Features:
-
-1. **Multiple Comment Types**:
-   - AI-generated comments using OpenAI (requires API key)
-   - Randomized positive comments from a pre-defined library
-   - Custom comments of your choice
-
-2. **Thread or Direct Mode**:
-   - Post new comments directly
-   - Reply to existing comments on the thread
-
-3. **Proxy Support**:
-   - Use HTTP/HTTPS or SOCKS proxies to avoid rate limiting
-   - Rotate proxies automatically across your wallets
-   - Define proxies in a simple text file
-
-4. **Multiple Wallet Support**:
-   - Post with all your wallets
-   - Control the number of comments per wallet
-
-### How to Use:
-
-1. **Via CLI Menu**:
-   ```
-   npm run labs
-   ```
-   Then select "Post PumpFun Replies" from the menu.
-
-2. **Via Direct Command**:
-   ```
-   npm run labs:cmd post-replies --token-mint YOUR_TOKEN_MINT --proxies
-   ```
-
-3. **Available Options**:
-   - `--token-mint <address>`: The token mint address
-   - `--comment <text>`: Custom comment text
-   - `--ai`: Use AI to generate comments
-   - `--randomize`: Use random positive comments
-   - `--proxies`: Use proxies for requests (requires proxies.txt)
-
-### Proxy Configuration:
-
-Create a `proxies.txt` file in the root directory with each proxy on a new line:
 ```
-http://username:password@host:port
-socks5://username:password@host:port
+# Solana RPC endpoint
+SOLANA_RPC_URL=https://your-rpc-url.com
+
+# API keys
+OPENAI_API_KEY=your-openai-key
+
+# Optional settings
+# OFFLINE_MODE=true  # Run without license verification
+# AUTO_ACTIVATE=true # Automatically activate license on new machine
+# USE_AI_OPTIMIZATION=true # Enable AI trading parameter optimization
+# USE_PROXIES=true # Enable proxy support for trading
 ```
 
-### Advanced Settings:
+Your wallets and settings are stored in the `.config` directory. This directory contains:
+- `wallets.json` - Your Solana wallet keypairs
+- `license.json` - Your active license information
+- `optimizations/` - AI trading optimization history and data
+- `proxies.json` - Proxy configuration settings
+- Other configuration files
 
-Configure timing and other settings in your `.env` file:
+## Using the AI Trading Bot
+
+The AI-enhanced trading bot uses real-time market data and machine learning to optimize trading parameters for maximum effectiveness.
+
+### Starting the Trading Bot
+
+To start the AI trading bot:
+
+```bash
+# Run with TypeScript
+npm run trade-bot
+
+# Or use the built version
+npm run trade-bot:build
+
+# Or start through the main CLI
+npm run start-bot
 ```
-COMMENT_MIN_INTERVAL=1000  # Minimum ms between comments
-COMMENT_MAX_INTERVAL=3000  # Maximum ms between comments
-OPENAI_KEY=your_openai_key  # For AI-generated comments
+
+### Trading Bot Configuration
+
+When starting the bot, you'll be guided through a setup process where you can:
+
+1. Set the token contract address to trade
+2. Choose between JITO mode or Lightning/Bump mode
+3. Enable or disable AI parameter optimization
+4. Enable or disable residential proxy support
+5. Set trading parameters:
+   - Maximum trade amount (in SOL)
+   - Minimum trade amount (in SOL)
+   - Time between buys (in milliseconds)
+   - Number of buys before selling
+   - Number of cycles to perform
+
+### AI Optimization
+
+When AI optimization is enabled:
+
+1. The bot fetches token metrics from DexScreener API every 5 minutes, including:
+   - Price and 24h price change
+   - Liquidity and volume
+   - Volatility and market trends
+
+2. These metrics are analyzed to recommend optimal trading parameters
+
+3. Optimization data is saved to `.config/optimizations/` for historical analysis
+
+4. Trading parameters are automatically adjusted based on market conditions
+
+You can enable AI optimization by:
+- Setting `USE_AI_OPTIMIZATION=true` in your `.env` file
+- Selecting "Yes" when prompted during bot startup
+- Including the `--useAi` flag when starting the bot programmatically
+
+## Residential Proxy Support
+
+The application provides advanced residential proxy support to make your trading and engagement activity appear natural and organic by rotating IPs across different geographic locations.
+
+### Setting Up Proxies
+
+```bash
+# Configure proxies through the interactive UI
+npm run labs
+# Then select "Setup Proxies" from the main menu
+
+# Or use the direct command
+npm run setup-proxy
+```
+
+### Oxylabs Residential Proxies
+
+Oxylabs residential proxies are fully integrated and recommended for the best results:
+
+1. Select "Configure Oxylabs Residential Proxies" from the setup menu
+2. Enter your Oxylabs username and password (without the "customer-" prefix)
+3. Test the connection to ensure everything works correctly
+4. Verify country-specific routing and IP rotation
+
+### Advanced Proxy Features
+
+When proxies are enabled, the bot implements these advanced features:
+
+1. **Wallet-to-IP Consistency**: Each wallet gets assigned a dedicated proxy session ID based on its public key, ensuring consistent IP identity across operations
+2. **Geographic Distribution**: Operations are automatically routed through proxies in different countries (US, UK, Germany, France, etc.) to appear as organic global activity
+3. **IP Freshness Tracking**: The system tracks which IPs have been used recently and ensures new operations use fresh IPs
+4. **Automatic Rotation**: IPs are automatically rotated between operations to prevent pattern detection
+5. **Fallback Mechanism**: If proxy connections fail, the system can gracefully continue without proxies
+6. **Session Management**: Uses Oxylabs' session control for consistent IP assignment per wallet
+
+### Proxy Support For All Operations
+
+The proxy system is integrated with all operations in the application:
+
+1. **Trading**: Route trades through different IPs to appear more organic
+2. **Profile Creation**: Create PumpFun profiles with diverse IP signatures
+3. **Comment Posting**: Post comments from different global locations
+4. **Token Creation**: Create tokens with full proxy support
+5. **API Interactions**: All API calls use the proxy system when enabled
+
+### Testing Your Proxy Configuration
+
+The proxy setup includes comprehensive testing features:
+- Test basic connectivity to verify credentials
+- Test IP rotation to ensure different IPs are being assigned
+- Test country-specific routing to verify geographic distribution
+
+You can enable proxy support by:
+- Setting `USE_PROXIES=true` in your `.env` file
+- Configuring proxies through the setup menu
+- The proxy system will be enabled automatically if valid proxy credentials are found
+
+## First-Time Setup
+
+When running the application for the first time, you'll go through these steps:
+
+1. **Environment Configuration**: You'll be prompted to enter your RPC URL and API keys
+2. **License Activation**: You'll verify your license key or create a trial
+3. **Wallet Creation**: You'll be guided to create your initial wallets
+4. **Interactive Menu**: You'll access the main application features
+
+This process only needs to be completed once. On subsequent runs, your settings will be loaded automatically.
+
+## Usage
+
+The application provides an interactive CLI interface. After starting with `npm run labs`, you can:
+
+- Create and manage Solana wallets
+- Monitor token activity
+- Post automated replies on pump.fun
+- Start volume generation bots
+- Distribute SOL between wallets
+- Collect dust from multiple wallets
+- Create new tokens on pump.fun
+- Start AI-enhanced trading bots
+- Configure residential proxies
+
+### Command Examples
+
+```bash
+# Start the bot with interactive menu
+npm run labs
+
+# Check wallet balances
+npm run check-balances
+
+# Create wallets
+node dist/index.js create-wallets
+
+# Post replies on pump.fun
+node dist/index.js post-reply
+
+# Create a new token
+node dist/index.js create-token
+
+# Start trading bot with AI optimization and proxies
+node dist/index.js start-bot --useAi --useProxies
+
+# Configure proxy settings
+node dist/index.js setup-proxy
 ```
 
 ## License
-ISC
 
-# Solana MMarker
-
-A commercial-grade Solana bot for market making, advanced trading, and pump.fun interactions with comprehensive wallet management and transaction execution options.
-
-## Premium Features
-
-- **Multi-Wallet Market Making**
-  - Automatic spread management across multiple DEXes
-  - Customizable risk parameters and volume generation
-  - Intelligent order sizing based on liquidity
-  - Support for Raydium, Jupiter, and Pump.fun
-
-- **Advanced Execution Methods**
-  - JITO bundled transaction support for MEV protection
-  - Lightning mode for priority-based transaction execution
-  - Configurable priority fees for high-congestion periods
-  - Transaction retry and automatic fee optimization
-
-- **Wallet Management & Infrastructure**
-  - Create and manage multiple Solana wallets
-  - SOL and token distribution across wallets
-  - Wallet monitoring with balance change notifications
-  - Dust collection and token consolidation
-
-- **Pump.fun Engagement Suite**
-  - Post comments on tokens with multiple wallets
-  - AI-generated comments via OpenAI
-  - Token monitoring to track activity
-  - Like comments to build engagement
-
-- **Security & Protection**
-  - Commercial-grade license protection
-  - Hardware binding for license keys
-  - Feature-based licensing tiers
-  - Encrypted configuration management
-
-## Building and Packaging
-
-### Development Setup
-
-```bash
-# Install dependencies
-npm install
-
-# Build the TypeScript code
-npm run build
-
-# Run in development mode
-npm run dev
-```
-
-### Packaging for Distribution
-
-To create binary distributions for different operating systems:
-
-```bash
-# Package for all platforms
-npm run package
-
-# Package with code obfuscation (recommended for commercial distribution)
-npm run package-obfuscated
-```
-
-This will create executable binaries in the `releases` directory for macOS, Windows, and Linux.
-
-## Market Making Configuration
-
-The market maker can be configured with various parameters:
-
-```bash
-# Start market making with default parameters
-solana-mmaker marketmaker --token-mint TOKEN_MINT --wallets-path ./wallets.json
-
-# Advanced configuration
-solana-mmaker marketmaker --token-mint TOKEN_MINT --spread 2 --volume 1000 --jito --lightning
-```
-
-### Key Parameters:
-
-- `--spread`: The bid-ask spread percentage (default: 1%)
-- `--volume`: Daily target volume in USD (default: $10,000)
-- `--wallet-count`: Number of wallets to use (default: all available)
-- `--jito`: Use JITO execution for MEV protection
-- `--lightning`: Use Lightning mode for faster execution
-- `--priority-fee`: Custom priority fee (in SOL)
-
-## Wallet Management
-
-Comprehensive wallet management functionality:
-
-```bash
-# Create new wallets
-solana-mmaker wallets create --count 5
-
-# Distribute SOL to wallets
-solana-mmaker wallets distribute --amount 0.1
-
-# Collect dust from wallets
-solana-mmaker wallets collect --min-amount 0.001
-
-# Transfer tokens between wallets
-solana-mmaker wallets transfer --from WALLET_ADDR --to WALLET_ADDR --amount 1.5 --token-mint TOKEN_MINT
-```
-
-## License Management
-
-This software uses a license management system to protect your intellectual property:
-
-1. License keys are bound to specific machines using hardware identifiers
-2. Licenses have configurable expiration dates and feature sets
-3. Support for online verification and offline fallback
-4. Different license tiers with varying feature sets
-
-### License Tiers
-
-The system supports different license tiers:
-
-- **Trial**: Limited features and wallets, expires after 30 days
-- **Standard**: Basic features, limited wallets
-- **Premium**: All features, increased wallet limits
-- **Enterprise**: Unlimited features and wallets, dedicated support
-
-## Distribution Notes
-
-When distributing your commercial bot:
-
-1. Change all URLs and server references to your own domains
-2. Update all licensing URLs and instructions
-3. Configure proper expiration dates for different license tiers
-4. Consider adding hardware lockdown for enterprise customers
-
-## Security Considerations
-
-The packaging system implements multiple layers of protection:
-
-1. Binary compilation makes the code unreadable
-2. Code obfuscation transforms function names and logic
-3. Machine-binding prevents simple license sharing
-4. Encryption of configuration and license files
+This software is provided under a commercial license. A valid license key is required for full functionality.
 
 ## Support
 
-For support or to purchase a license, contact:
+For questions, issues, or to obtain a license, please contact support@koynlabs.com
 
-- Website: [https://yourcompany.com/solana-mmaker](https://yourcompany.com/solana-mmaker)
-- Email: support@yourcompany.com
+## Creating Pump.fun Profiles
 
-## Legal
+The application includes a powerful profile creation utility that can automatically generate and set up PumpFun profiles for your wallets.
 
-This software is for commercial use only under the terms of your license agreement. Unauthorized reproduction or distribution is prohibited.
+### Profile Creation Features
+
+```bash
+# Create profiles through the CLI
+npm run create-profiles
+
+# Or use the direct command
+npm run labs create-profiles
+```
+
+Features of the profile creator:
+
+1. **Bulk Creation**: Create profiles for multiple wallets in a single operation
+2. **AI-Generated Content**: Option to use OpenAI to generate unique usernames and bios
+3. **Random Usernames**: Generate crypto-themed usernames automatically
+4. **Profile Images**: Option to upload profile pictures from your img/ directory
+5. **Proxy Support**: Route profile creation through different IPs for more organic setup
+   - Uses the same residential proxy system as trading
+   - Assigns consistent proxy sessions to wallets
+   - Prevents detection of bulk profile creation
+   - Automatically rotates IPs to avoid rate limiting
+   - Handles proxy connection errors gracefully
+
+### Using the Profile Creator
+
+When running the profile creator, you'll be guided through several options:
+
+1. Select your wallet file (defaults to .config/wallets.json)
+2. Choose whether to use residential proxies (if configured)
+3. Choose whether to use AI for generating usernames and bios
+4. Optionally provide OpenAI API key for content generation
+5. Decide whether to upload profile images
+6. For non-AI mode, choose custom or random usernames and bios
+
+The profile creator will then:
+- Create accounts on pump.fun for each wallet
+- Generate unique usernames and bios (random or AI-generated)
+- Upload profile images if requested
+- Verify profile creation was successful
+- Provide a summary of successful and failed profiles

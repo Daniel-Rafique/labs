@@ -23,15 +23,17 @@ Module.prototype.require = function(id: string) {
   return originalRequire.call(this, id);
 };
 
-// Also set up module-alias for other custom imports if needed
+// Also set up module-alias for other custom imports 
 try {
   const moduleAlias = require('module-alias');
   const rootPath = path.resolve(__dirname, '../');
   
   moduleAlias.addAliases({
     '@utils': path.join(rootPath, 'src/utils'),
-    '@constants': path.join(rootPath, 'src/constants')
-    });
+    '@constants': path.join(rootPath, 'src/constants'),
+    '@commands': path.join(rootPath, 'src/commands'),
+    '@lib': path.join(rootPath, 'src/lib')
+  });
 } catch (error) {
   console.warn('Warning: module-alias package not found, skipping additional aliases.');
-} 
+}

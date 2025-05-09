@@ -2,6 +2,7 @@ node_modules/
 patches/
 releases/
 .config/
+.config/optimizations/
 .env
 .vscode/
 models/
@@ -24,3 +25,6 @@ dist/core/models/*.json
 # Ignore log files
 dist/strategies/*/logs/*.json
 PumpFun
+
+# AI optimization files
+.config/optimizations/*.json

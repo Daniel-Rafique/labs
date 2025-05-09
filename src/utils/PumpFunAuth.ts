@@ -82,7 +82,7 @@ export function hideProxyCredentials(proxyUrl: string): string {
  * @param proxy Optional proxy configuration to use
  * @returns Configured Axios instance
  */
-export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance {
+export function createAxiosInstance(proxy?: ProxyConfig | string | any): AxiosInstance {
   // Default configuration with browser-like headers
   const config: any = {
     timeout: 30000,
@@ -90,8 +90,22 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
     maxRedirects: 5
   };
 
+  // If no proxy provided, return a direct connection without logging
   if (!proxy) {
-    console.log(chalk.blue('Creating connection without proxy'));
+    return axios.create(config);
+  }
+
+  // Check if proxy is a simple boolean flag or has useProxy property 
+  // (compatibility with legacy code and ProxyManager output)
+  if (proxy === true || (typeof proxy === 'object' && proxy.useProxy === true && !proxy.url && !proxy.httpsAgent)) {
+    console.log(chalk.yellow('Proxy requested but no valid proxy configuration provided'));
+    return axios.create(config);
+  }
+
+  // Handle the case where proxy already has an httpsAgent
+  if (proxy.httpsAgent) {
+    config.httpsAgent = proxy.httpsAgent;
+    config.httpAgent = proxy.httpAgent || proxy.httpsAgent;
     return axios.create(config);
   }
 
@@ -100,15 +114,24 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
     let proxyUrl: string;
     let proxyType: string;
 
+    // Determine proxy URL and type based on different input formats
     if (typeof proxy === 'string') {
       proxyUrl = proxy;
       proxyType = proxy.startsWith('socks') ? 'socks' : 'http';
-    } else {
+    } else if (proxy.url) {
       proxyUrl = proxy.url;
       proxyType = (proxy.type || '').startsWith('socks') ? 'socks' : 'http';
+    } else if (proxy.host && proxy.port) {
+      // Handle ProxyManager output format
+      const protocol = proxy.protocol || 'http';
+      const auth = proxy.auth ? `${encodeURIComponent(proxy.auth.username)}:${encodeURIComponent(proxy.auth.password)}@` : '';
+      proxyUrl = `${protocol}://${auth}${proxy.host}:${proxy.port}`;
+      proxyType = protocol.startsWith('socks') ? 'socks' : 'http';
+    } else {
+      console.log(chalk.yellow('Invalid proxy configuration, using direct connection'));
+      return axios.create(config);
     }
 
-    // Extract proxy credentials if they exist
     try {
       const url = new URL(proxyUrl);
       
@@ -126,11 +149,16 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
       // Handle authentication based on proxy type
       if (username && password) {
         if (proxyType === 'socks') {
-          // SOCKS proxy with auth
-          const socksProxyUrl = `${url.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '1080'}`;
-          config.httpsAgent = new SocksProxyAgent(socksProxyUrl);
-          config.httpAgent = config.httpsAgent;
-          console.log(chalk.gray(`Using SOCKS proxy: ${hideProxyCredentials(proxyUrl)}`));
+          // SOCKS proxy with auth - ensure URL is properly formed
+          try {
+            const socksProxyUrl = `${url.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '1080'}`;
+            config.httpsAgent = new SocksProxyAgent(socksProxyUrl);
+            config.httpAgent = config.httpsAgent;
+            console.log(chalk.gray(`Using SOCKS proxy: ${hideProxyCredentials(proxyUrl)}`));
+          } catch (socksError) {
+            console.log(chalk.red(`Error setting up SOCKS proxy: ${socksError}`));
+            return axios.create(config); // Return direct connection on error
+          }
         } else {
           // HTTP/HTTPS proxy handling based on provider
           if (isOxylabs) {
@@ -154,23 +182,28 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
               console.log(chalk.green(`Using datacenter proxy configuration`));
               
               // Simple proxy setup for datacenter - just use the direct URL
-              const directProxyUrl = `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '10000'}`;
-              
-              // Using agent approach for datacenter proxies
-              const proxyAgent = new HttpsProxyAgent(directProxyUrl);
-              config.httpsAgent = proxyAgent;
-              config.httpAgent = proxyAgent;
-              
-              // For datacenter, setting the proxy property directly works well
-              config.proxy = {
-                host: url.hostname,
-                port: parseInt(url.port || '10000'),
-                auth: {
-                  username: username,
-                  password: password
-                },
-                protocol: 'http'
-              };
+              try {
+                const directProxyUrl = `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '10000'}`;
+                
+                // Using agent approach for datacenter proxies
+                const proxyAgent = new HttpsProxyAgent(directProxyUrl);
+                config.httpsAgent = proxyAgent;
+                config.httpAgent = proxyAgent;
+                
+                // For datacenter, setting the proxy property directly works well
+                config.proxy = {
+                  host: url.hostname,
+                  port: parseInt(url.port || '10000'),
+                  auth: {
+                    username: username,
+                    password: password
+                  },
+                  protocol: 'http'
+                };
+              } catch (dcError) {
+                console.log(chalk.red(`Error setting up datacenter proxy: ${dcError}`));
+                return axios.create(config);
+              }
             } else {
               // Residential proxies may need session IDs
               if (usernameParts.length === 1) {
@@ -181,15 +214,20 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
               }
               
               // Create a direct proxy URL with proper encoding of credentials
-              const directProxyUrl = `http://${encodeURIComponent(modifiedUsername)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '7777'}`;
-              
-              // Using only HttpsProxyAgent - this is the key for Oxylabs
-              const proxyAgent = new HttpsProxyAgent(directProxyUrl);
-              config.httpsAgent = proxyAgent;
-              config.httpAgent = proxyAgent;
-              
-              // Do NOT set config.proxy for residential Oxylabs - use only the agent
-              config.proxy = false;
+              try {
+                const directProxyUrl = `http://${encodeURIComponent(modifiedUsername)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '7777'}`;
+                
+                // Using only HttpsProxyAgent - this is the key for Oxylabs
+                const proxyAgent = new HttpsProxyAgent(directProxyUrl);
+                config.httpsAgent = proxyAgent;
+                config.httpAgent = proxyAgent;
+                
+                // Do NOT set config.proxy for residential Oxylabs - use only the agent
+                config.proxy = false;
+              } catch (resError) {
+                console.log(chalk.red(`Error setting up residential proxy: ${resError}`));
+                return axios.create(config);
+              }
             }
             
             // Always set auth header directly - this helps with both types
@@ -211,63 +249,78 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
             console.log(chalk.cyan(`Detected ${isBrightData ? 'Bright Data' : 'SmartProxy'} proxy, using specialized configuration...`));
             
             // For these providers, we'll use both techniques to ensure it works
-            const proxyAuthUrl = `${url.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '80'}`;
-            config.httpsAgent = new HttpsProxyAgent(proxyAuthUrl);
-            config.httpAgent = new HttpsProxyAgent(proxyAuthUrl);
-            
-            // Also set direct proxy config with auth
-            config.proxy = {
-              protocol: url.protocol.replace(':', ''),
-              host: url.hostname,
-              port: parseInt(url.port || '80'),
-              auth: {
-                username: username,
-                password: password
-              }
-            };
-            
-            // Add authorization header for good measure
-            config.headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-            
-            // Add special headers for session persistence
-            config.headers['Connection'] = 'keep-alive';
-            config.headers['Keep-Alive'] = 'timeout=60';
+            try {
+              const proxyAuthUrl = `${url.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(password)}@${url.hostname}:${url.port || '80'}`;
+              config.httpsAgent = new HttpsProxyAgent(proxyAuthUrl);
+              config.httpAgent = new HttpsProxyAgent(proxyAuthUrl);
+              
+              // Also set direct proxy config with auth
+              config.proxy = {
+                protocol: url.protocol.replace(':', ''),
+                host: url.hostname,
+                port: parseInt(url.port || '80'),
+                auth: {
+                  username: username,
+                  password: password
+                }
+              };
+              
+              // Add authorization header for good measure
+              config.headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+              
+              // Add special headers for session persistence
+              config.headers['Connection'] = 'keep-alive';
+              config.headers['Keep-Alive'] = 'timeout=60';
+            } catch (bdError) {
+              console.log(chalk.red(`Error setting up BrightData/SmartProxy: ${bdError}`));
+              return axios.create(config);
+            }
           } else {
             // Standard HTTP proxy
             console.log(chalk.gray(`Using standard HTTP proxy with auth: ${hideProxyCredentials(proxyUrl)}`));
             
-            // Set proxy with auth
-            config.proxy = {
-              protocol: url.protocol.replace(':', ''),
-              host: url.hostname,
-              port: parseInt(url.port || '80'),
-              auth: {
-                username: username,
-                password: password
-              }
-            };
-            
-            // Also set auth headers directly
-            config.headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+            try {
+              // Set proxy with auth
+              config.proxy = {
+                protocol: url.protocol.replace(':', ''),
+                host: url.hostname,
+                port: parseInt(url.port || '80'),
+                auth: {
+                  username: username,
+                  password: password
+                }
+              };
+              
+              // Also set auth headers directly
+              config.headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+            } catch (stdError) {
+              console.log(chalk.red(`Error setting up standard proxy: ${stdError}`));
+              return axios.create(config);
+            }
           }
         }
       } else if (url.hostname) {
         // Proxy without auth
         console.log(chalk.gray(`Using proxy without authentication: ${proxyUrl}`));
-        if (proxyType === 'socks') {
-          const socksProxyUrl = `${url.protocol}//${url.hostname}:${url.port || '1080'}`;
-          config.httpsAgent = new SocksProxyAgent(socksProxyUrl);
-          config.httpAgent = config.httpsAgent;
-        } else {
-          config.proxy = {
-            protocol: url.protocol.replace(':', ''),
-            host: url.hostname,
-            port: parseInt(url.port || '80')
-          };
+        try {
+          if (proxyType === 'socks') {
+            const socksProxyUrl = `${url.protocol}//${url.hostname}:${url.port || '1080'}`;
+            config.httpsAgent = new SocksProxyAgent(socksProxyUrl);
+            config.httpAgent = config.httpsAgent;
+          } else {
+            config.proxy = {
+              protocol: url.protocol.replace(':', ''),
+              host: url.hostname,
+              port: parseInt(url.port || '80')
+            };
+          }
+        } catch (noAuthError) {
+          console.log(chalk.red(`Error setting up proxy without auth: ${noAuthError}`));
+          return axios.create(config);
         }
       }
-    } catch (error) {
-      console.error(chalk.red(`Error setting up proxy: ${error}`));
+    } catch (urlParseError) {
+      console.error(chalk.red(`Error parsing proxy URL: ${urlParseError}`));
       // Fallback to direct connection
       return axios.create({
         timeout: 30000,
@@ -288,7 +341,7 @@ export function createAxiosInstance(proxy?: ProxyConfig | string): AxiosInstance
           
           // Check if this is an Oxylabs proxy
           const isOxylabs = (typeof proxy === 'string' && proxy.includes('oxylabs')) || 
-                           (typeof proxy !== 'string' && proxy.url.includes('oxylabs'));
+                           (typeof proxy !== 'string' && proxy.url && proxy.url.includes('oxylabs'));
           
           if (isOxylabs) {
             try {

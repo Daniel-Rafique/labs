@@ -1,0 +1,34 @@
+[2025-05-08T18:46:28.876Z] [INFO] Starting trading bot with enhanced error handling...
+[2025-05-08T18:46:28.877Z] [INFO] Initializing TradingBot instance
+[2025-05-08T18:46:28.877Z] [INFO] Starting TradingBot in run method
+[2025-05-08T18:46:28.879Z] [INFO] [32mLoaded 1 proxy configurations[39m
+[2025-05-08T18:46:28.882Z] [INFO] Configuration validated successfully
+[2025-05-08T18:46:28.883Z] [INFO] TradingBot instance created successfully
+[2025-05-08T18:46:28.883Z] [INFO] Starting trading bot
+[2025-05-08T18:46:29.065Z] [INFO] Assigned proxy sessions to 5 wallets
+[2025-05-08T18:46:29.065Z] [INFO] Successfully loaded 5 wallets (using 3 for trading)
+[2025-05-08T18:46:29.080Z] [ERROR] (node:39341) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[2025-05-08T18:46:29.736Z] [INFO] Updated wallet balances
+[2025-05-08T18:46:29.975Z] [INFO] Updated wallet balances
+[2025-05-08T18:46:29.976Z] [INFO] 
+=========================================
+[2025-05-08T18:46:29.976Z] [INFO] ⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️
+[2025-05-08T18:46:29.976Z] [INFO] =========================================
+[2025-05-08T18:46:29.976Z] [INFO] None of your wallets have sufficient SOL balance to trade.
+[2025-05-08T18:46:29.976Z] [INFO] Minimum required: 5 SOL per wallet
+[2025-05-08T18:46:29.976Z] [INFO] 
+Please fund at least one wallet with SOL, then:
+[2025-05-08T18:46:29.976Z] [INFO] 1. Use the "Distribute SOL" command to spread funds to multiple wallets
+[2025-05-08T18:46:29.976Z] [INFO] 2. Restart the bot after funding your wallets
+[2025-05-08T18:46:29.976Z] [INFO] =========================================
+
+[2025-05-08T18:46:29.977Z] [ERROR] Trading bot stopped due to insufficient wallet balances
+[2025-05-08T18:46:29.977Z] [INFO] TradingBot start method completed
+[2025-05-08T18:46:29.978Z] [INFO] TradingBot is now running
+[2025-05-08T18:46:29.978Z] [INFO] Bot started successfully
+[2025-05-08T18:47:29.980Z] [INFO] Bot heartbeat - still running
+[2025-05-08T18:48:29.992Z] [INFO] Bot heartbeat - still running
+[2025-05-08T18:49:30.000Z] [INFO] Bot heartbeat - still running
+[2025-05-08T18:50:30.033Z] [INFO] Bot heartbeat - still running
+[2025-05-08T18:51:27.115Z] [INFO] Received SIGINT signal

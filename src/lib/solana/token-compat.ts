@@ -164,3 +164,64 @@ function createAssociatedTokenAccountInstruction(
     data: Buffer.alloc(0),
   });
 }
+
+/**
+ * Safe compatibility layer for @solana/buffer-layout-utils
+ * This patches the vulnerable bigint-buffer dependency with our secure implementation
+ */
+
+import * as BufferLayout from '@solana/buffer-layout';
+import * as bigintBuffer from '../security/bigint-buffer-safe';
+
+/**
+ * Safe implementation of the u64 layout from buffer-layout-utils
+ * This replaces the vulnerable bigint-buffer dependency with our secure implementation
+ */
+export function u64(property?: string): BufferLayout.Layout<bigint> {
+  const layout = BufferLayout.blob(8, property);
+  
+  // Use a simple solution that works around TypeScript limitations
+  const safeLayout = Object.assign({}, layout, {
+    decode: (buffer: any, offset?: number) => {
+      const data = layout.decode(buffer, offset);
+      return bigintBuffer.toBigIntLE(data);
+    },
+    
+    encode: (value: bigint, buffer: any, offset?: number) => {
+      const data = bigintBuffer.toBufferLE(value, 8);
+      return layout.encode(data as any, buffer, offset);
+    }
+  });
+  
+  // Force TypeScript to accept the conversion
+  return safeLayout as unknown as BufferLayout.Layout<bigint>;
+}
+
+/**
+ * Safe implementation of the u128 layout from buffer-layout-utils
+ * This replaces the vulnerable bigint-buffer dependency with our secure implementation
+ */
+export function u128(property?: string): BufferLayout.Layout<bigint> {
+  const layout = BufferLayout.blob(16, property);
+  
+  // Use a simple solution that works around TypeScript limitations
+  const safeLayout = Object.assign({}, layout, {
+    decode: (buffer: any, offset?: number) => {
+      const data = layout.decode(buffer, offset);
+      return bigintBuffer.toBigIntLE(data);
+    },
+    
+    encode: (value: bigint, buffer: any, offset?: number) => {
+      const data = bigintBuffer.toBufferLE(value, 16);
+      return layout.encode(data as any, buffer, offset);
+    }
+  });
+  
+  // Force TypeScript to accept the conversion
+  return safeLayout as unknown as BufferLayout.Layout<bigint>;
+}
+
+/**
+ * Export the bigint-buffer-safe functions for any other code that might need them
+ */
+export const bigintBufferSafe = bigintBuffer;

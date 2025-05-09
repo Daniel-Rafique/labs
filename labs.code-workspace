@@ -1,0 +1,29 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../aidrops"
+		},
+		{
+			"path": "../liquidity-sniper"
+		},
+		{
+			"path": "../solana-liquidity"
+		},
+		{
+			"path": "../spl-snapshot"
+		},
+		{
+			"path": "../market-maker/functions"
+		},
+		{
+			"path": "../solana-mmaker"
+		},
+		{
+			"path": "../api-endpoints"
+		}
+	],
+	"settings": {}
+}

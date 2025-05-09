@@ -14,6 +14,7 @@ import chalk from 'chalk';
 import { sleep } from './transaction';
 import { createAuthPayload } from './AuthSignature';
 import { uploadImage } from './imageUpload';
+import { getProxyManager } from './proxyManager';
 
 // Constants for authentication and AWS token fetching (mirroring pumpfun-comment-bot)
 const PUMP_FUN_BASE_URL = "https://frontend-api-v3.pump.fun";
@@ -56,7 +57,7 @@ function convertWalletFormat(wallet: WalletData): { publicKey: string; secretKey
  * @param wallet The wallet data in the old format
  * @param tokenMint The mint address of the token
  * @param comment The comment text to post
- * @param proxy Ignored - always uses direct connection
+ * @param proxy Optional proxy configuration to use
  * @param withImage Whether to include an image with the comment
  * @returns True if comment was posted successfully
  */
@@ -68,18 +69,43 @@ export async function enhancedPostComment(
   withImage: boolean = false
 ): Promise<boolean> {
   try {
-    // Always use direct connection regardless of proxy parameter
-    console.log(chalk.green('✓ Using direct connection for optimal reliability'));
+    // Always use proxy, either from parameters or by creating one
+    const proxyManager = getProxyManager();
+    let proxyConfig = proxy;
+    
+    // If no proxy provided or it's just a boolean flag
+    if (!proxy || typeof proxy === 'boolean' || proxy.useProxy) {
+      if (proxyManager && proxyManager.isEnabled()) {
+        // Generate a session ID based on wallet public key
+        const sessionId = `comment-${wallet.publicKey.substring(0, 8)}-${Math.floor(Math.random() * 1000000)}`;
+        
+        // Get country-specific US proxy for pump.fun
+        try {
+          proxyConfig = proxyManager.getAxiosConfig('US', undefined, sessionId);
+          console.log(chalk.green(`✓ Using Oxylabs proxy for pump.fun connection with session ID: ${sessionId}`));
+        } catch (error) {
+          console.log(chalk.red(`Error getting proxy config: ${error instanceof Error ? error.message : String(error)}`));
+          proxyConfig = undefined;
+        }
+      } else {
+        console.log(chalk.red('Warning: Proxy manager is not enabled. Comments may fail due to CAPTCHA protection.'));
+        proxyConfig = undefined;
+      }
+    } else {
+      // Get session ID from proxy object if it exists
+      const proxySessionId = proxy?.sessionId || "custom";
+      console.log(chalk.green(`✓ Using provided proxy configuration for pump.fun connection with session ID: ${proxySessionId}`));
+    }
     
     // First authenticate to get tokens
-    const authResult = await enhancedAuthenticate(wallet);
+    const authResult = await enhancedAuthenticate(wallet, proxyConfig);
     if (!authResult) {
       console.log(chalk.red('Failed to authenticate with Pump.fun'));
       return false;
     }
     
     // Check if comments are enabled with the auth tokens
-    const commentsEnabled = await checkCommentsEnabled(tokenMint, undefined, authResult.awsToken, authResult.authToken);
+    const commentsEnabled = await checkCommentsEnabled(tokenMint, proxyConfig, authResult.awsToken, authResult.authToken);
     if (!commentsEnabled) {
       console.log(chalk.yellow('Comments seem to be disabled for this token or API check failed.'));
       // Depending on strictness, you might want to return false or try posting anyway
@@ -93,7 +119,11 @@ export async function enhancedPostComment(
       console.log(chalk.blue('Uploading image for comment...'));
       try {
         // Use our TypeScript uploadImage function from the imageUpload module
-        const uploadResult = await uploadImage(authResult.authToken);
+        // Convert the proxy object to a boolean flag and pass the session ID if available
+        const useProxyFlag = proxy !== undefined;
+        const sessionId = proxy && proxy.sessionId ? proxy.sessionId : undefined;
+        
+        const uploadResult = await uploadImage(authResult.authToken, useProxyFlag, sessionId);
         // Only set imageUrl if upload was successful (not null)
         if (uploadResult) {
           imageUrl = uploadResult;
@@ -115,7 +145,7 @@ export async function enhancedPostComment(
         tokenMint, 
         comment, 
         authResult,
-        undefined, // No proxy
+        proxyConfig, // Use the provided proxy
         {
           maxRetries: 3,
           timeoutSeconds: 30,
@@ -135,7 +165,7 @@ export async function enhancedPostComment(
 /**
  * Check if comments are enabled for a token using our enhanced implementation
  * @param tokenMint The mint address to check
- * @param proxy Ignored - always uses direct connection
+ * @param proxy Optional proxy configuration to use
  * @returns True if comments are enabled
  */
 export async function enhancedCheckCommentsEnabled(
@@ -143,11 +173,14 @@ export async function enhancedCheckCommentsEnabled(
   proxy?: any
 ): Promise<boolean> {
   try {
-    // Always use direct connection
-    console.log(chalk.green('✓ Using direct connection for API check'));
+    if (proxy) {
+      console.log(chalk.green('✓ Using proxy for API check'));
+    } else {
+      console.log(chalk.yellow('No proxy provided, using direct connection for API check'));
+    }
     
-    // Call without auth tokens, which is fine for most cases
-    return await checkCommentsEnabled(tokenMint, undefined);
+    // Call with provided proxy (or undefined if none)
+    return await checkCommentsEnabled(tokenMint, proxy);
   } catch (error) {
     // Default to true if we can't check
     return true;
@@ -157,17 +190,34 @@ export async function enhancedCheckCommentsEnabled(
 /**
  * Direct implementation of sign-in to Pump.fun following the reference code pattern
  * @param wallet Wallet data
- * @param proxy Ignored - always uses direct connection
+ * @param proxy Optional proxy configuration to use
  * @returns Authentication cookies and AWS token if successful
  */
 async function directPumpSignIn(
   wallet: WalletData,
-  proxy?: ProxyConfig | string
+  proxy?: any
 ): Promise<PumpFunAuthResult | null> {
-  console.log(chalk.cyan(`Directly signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)}...`));
+  const usingProxy = proxy !== undefined;
   
-  // Create an axios instance without proxy
-  const client = createAxiosInstance();
+  if (usingProxy) {
+    console.log(chalk.cyan(`Signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)} using proxy...`));
+  } else {
+    console.log(chalk.cyan(`Directly signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)}...`));
+  }
+  
+  // Create an axios instance with or without proxy
+  let client;
+  try {
+    client = createAxiosInstance(proxy);
+  } catch (error) {
+    console.log(chalk.red(`Error creating axios instance: ${error instanceof Error ? error.message : String(error)}`));
+    client = axios.create({
+      timeout: 30000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+      }
+    });
+  }
   
   try {
     // Convert key format if needed
@@ -299,223 +349,187 @@ async function directPumpSignIn(
 }
 
 /**
- * Wrapper for authenticating with PumpFun
- * @param wallet Wallet data in the old format
- * @param proxy Ignored - always uses direct connection
- * @returns Authentication result if successful, null otherwise
+ * Enhanced authentication wrapper
+ * @param wallet Wallet data 
+ * @param proxy Optional proxy configuration to use
+ * @returns Authentication result if successful
  */
 export async function enhancedAuthenticate(
   wallet: WalletData, 
   proxy?: any
 ): Promise<PumpFunAuthResult | null> {
   try {
-    console.log(chalk.cyan(`Authenticating wallet ${wallet.publicKey.substring(0, 8)}...`));
+    // Always use proxy when possible
+    const proxyManager = getProxyManager();
+    let proxyConfig = proxy;
     
-    // Always use direct connection
-    console.log(chalk.cyan('Using direct connection for authentication'));
-    
-    // First try the direct implementation that follows the reference code
-    try {
-      const directResult = await directPumpSignIn(wallet, undefined);
-      if (directResult) {
-        console.log(chalk.green(`✓ Direct authentication successful for ${wallet.publicKey.substring(0,8)}...`));
-        return directResult;
+    // If no proxy provided or it's just a boolean flag
+    if (!proxy || typeof proxy === 'boolean' || proxy.useProxy) {
+      if (proxyManager && proxyManager.isEnabled()) {
+        // Generate a session ID based on wallet public key
+        const sessionId = proxy?.sessionId || `auth-${wallet.publicKey.substring(0, 8)}-${Math.floor(Math.random() * 1000000)}`;
+        
+        // Get country-specific US proxy for pump.fun authentication
+        try {
+          proxyConfig = proxyManager.getAxiosConfig('US', undefined, sessionId);
+          console.log(chalk.green(`✓ Using Oxylabs proxy for authentication with session ID: ${sessionId}`));
+        } catch (error) {
+          console.log(chalk.red(`Error getting proxy config: ${error instanceof Error ? error.message : String(error)}`));
+          proxyConfig = undefined;
+        }
+      } else {
+        console.log(chalk.red('Warning: Proxy manager is not enabled. Authentication may fail due to CAPTCHA protection.'));
+        proxyConfig = undefined;
       }
-    } catch (directError: any) {
-      console.log(chalk.yellow(`Direct authentication failed: ${directError.message}`));
+    } else {
+      // Get session ID from proxy object if it exists
+      const proxySessionId = proxy?.sessionId || "custom";
+      console.log(chalk.green(`✓ Using provided proxy configuration for authentication with session ID: ${proxySessionId}`));
     }
     
-    // If direct method failed, try final approach
-    console.log(chalk.cyan('Attempting alternative authentication method...'));
-    try {
-      const client = createAxiosInstance(); // No proxy
-      const secretKey = typeof wallet.secretKey === 'string' ? bs58.decode(wallet.secretKey) : wallet.secretKey;
-      const authPayload = await createAuthPayload(wallet.publicKey, secretKey);
-      
-      // Try authentication with client-proxy-server endpoint
-      const response = await client.post(`https://client-proxy-server.pump.fun/auth/login`, authPayload, {
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "*/*",
-          "Origin": "https://pump.fun",
-          "Referer": "https://pump.fun/",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-        },
-        timeout: 20000
-      });
-      
-      // Extract cookies from response headers
-      const cookieHeader = response.headers['set-cookie'];
-      if (!cookieHeader) {
-        console.log(chalk.yellow("No cookies in response headers"));
-        return null;
-      }
-      
-      // Parse cookies
-      const cookies: Record<string, string> = {};
-      (Array.isArray(cookieHeader) ? cookieHeader : [cookieHeader]).forEach(cookieString => {
-        const cookieParts = cookieString.split(';')[0].split('=');
-        if (cookieParts.length >= 2) {
-          const name = cookieParts[0].trim();
-          const value = cookieParts.slice(1).join('=').trim();
-          cookies[name] = value;
-        }
-      });
-      
-      if (!cookies.auth_token) {
-        console.log(chalk.yellow("No auth_token cookie found in response"));
-        return null;
-      }
-      
-      console.log(chalk.green(`Alternative authentication method successful for ${wallet.publicKey.substring(0, 8)}`));
-      
-      // Try to get AWS token
-      try {
-        const cookieString = Object.entries(cookies)
-          .map(([name, value]) => `${name}=${value}`)
-          .join('; ');
-        
-        const awsResponse = await client.get(
-          `${PUMP_FUN_BASE_URL}/token/generateTokenForThread?user=${wallet.publicKey}`, 
-          {
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "*/*",
-              "Cookie": cookieString,
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-            },
-            timeout: 15000
-          }
-        );
-        
-        if (awsResponse.data && awsResponse.data.token) {
-          return {
-            authToken: cookies.auth_token,
-            awsToken: awsResponse.data.token,
-            userPublicKey: wallet.publicKey
-          };
-        } else {
-          // Return without AWS token if we can't find it in the response
-          return {
-            authToken: cookies.auth_token,
-            awsToken: '',
-            userPublicKey: wallet.publicKey
-          };
-        }
-      } catch (awsError) {
-        // Return without AWS token
-        return {
-          authToken: cookies.auth_token,
-          awsToken: '',
-          userPublicKey: wallet.publicKey
-        };
-      }
-    } catch (finalError: any) {
-      console.error(chalk.red(`All authentication methods failed: ${finalError.message}`));
-      return null;
-    }
+    // Get authentication with the provided proxy
+    return await directPumpSignIn(wallet, proxyConfig);
   } catch (error: any) {
-    console.error(chalk.red(`Authentication process failed for ${wallet.publicKey}: ${error.message}`));
-    if (error.response) {
-      console.error(chalk.red(`Error response: ${JSON.stringify(error.response.data)}`));
+    console.error(chalk.red(`Authentication failed: ${error.message}`));
+    
+    // If authentication fails with proxy, try direct connection as fallback but with warning
+    if (proxy) {
+      console.log(chalk.yellow('Warning: Authentication with proxy failed. Trying direct connection as fallback, but this may fail due to CAPTCHA protection.'));
+      try {
+        return await directPumpSignIn(wallet, undefined);
+      } catch (fallbackError: any) {
+        console.error(chalk.red(`Fallback authentication also failed: ${fallbackError.message}`));
+        return null;
+      }
     }
+    
     return null;
   }
 }
 
 /**
- * Likes a single comment on Pump.fun.
- * @param commentId The ID of the comment/reply to like.
- * @param authResult The authentication result containing the authToken.
- * @param proxy Ignored - always uses direct connection
- * @returns True if like was successful, false otherwise.
+ * Enhanced like comment implementation
+ * 
+ * @param commentId Comment ID to like
+ * @param authResult Authentication result with tokens
+ * @param proxy Optional proxy configuration
+ * @returns True if comment was successfully liked
  */
 export async function enhancedLikeComment(
   commentId: string,
   authResult: PumpFunAuthResult,
   proxy?: any
 ): Promise<boolean> {
-  if (!authResult || !authResult.authToken) {
-    console.error(chalk.red('Cannot like comment: Missing authentication token.'));
+  if (!commentId || !authResult || !authResult.authToken) {
     return false;
   }
 
-  // Create axios instance without proxy
-  const client = createAxiosInstance();
-
-  // Use the known working endpoint based on reference implementation
-  const likeUrl = `${PUMP_FUN_BASE_URL}/likes/${commentId}`;
-  console.log(chalk.gray(`Attempting to like comment ID: ${commentId}`));
-
-  try {
-    // Convert cookies to cookie string
-    const cookieString = `auth_token=${authResult.authToken}`;
-    
-    // Use the exact headers from the reference implementation
-    const headers: Record<string, string> = {
-      "Accept": "*/*",
-      "Accept-Encoding": "gzip, deflate, br, zstd",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Content-Type": "application/json",
-      "Cookie": cookieString,
-      "Origin": "https://pump.fun",
-      "Referer": "https://pump.fun/",
-      "Sec-Ch-Ua": "\"Microsoft Edge\";v=\"125\", \"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
-      "Sec-Ch-Ua-Mobile": "?0",
-      "Sec-Ch-Ua-Platform": "\"Windows\"",
-      "Sec-Fetch-Dest": "empty",
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "same-site",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-    };
-
-    // Add AWS token if available
-    if (authResult.awsToken) {
-      headers["X-Aws-Proxy-Token"] = authResult.awsToken;
-    }
-
-    // Try with retries
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  // Always use proxy when possible
+  const proxyManager = getProxyManager();
+  let proxyConfig = proxy;
+  
+  // If no proxy provided or it's just a boolean flag
+  if (!proxy || typeof proxy === 'boolean' || proxy.useProxy) {
+    if (proxyManager && proxyManager.isEnabled()) {
+      // Generate a session ID for consistent proxy usage
+      const sessionId = proxy?.sessionId || `like-${Math.floor(Math.random() * 1000000)}`;
+      
+      // Get country-specific US proxy for pump.fun
       try {
-        const response = await client.post(likeUrl, {}, { headers });
+        proxyConfig = proxyManager.getAxiosConfig('US', undefined, sessionId);
+        console.log(chalk.green(`✓ Using Oxylabs proxy for liking comments with session ID: ${sessionId}`));
+      } catch (error) {
+        console.log(chalk.red(`Error getting proxy config: ${error instanceof Error ? error.message : String(error)}`));
+        proxyConfig = undefined;
+      }
+    } else {
+      console.log(chalk.red('Warning: Proxy manager is not enabled. Liking comments may fail due to CAPTCHA protection.'));
+      proxyConfig = undefined;
+    }
+  } else {
+    // Get session ID from proxy object if it exists
+    const proxySessionId = proxy?.sessionId || "custom";
+    console.log(chalk.green(`✓ Using provided proxy configuration for liking comments with session ID: ${proxySessionId}`));
+  }
+  
+  // Create axios instance with or without proxy
+  let client;
+  try {
+    client = createAxiosInstance(proxyConfig);
+  } catch (error) {
+    console.log(chalk.red(`Error creating axios instance: ${error instanceof Error ? error.message : String(error)}`));
+    client = axios.create({
+      timeout: 30000,
+      headers: COMMON_HEADERS
+    });
+  }
+  
+  try {
+    // Define all possible like endpoint formats - try in this specific order for best results
+    const likeEndpoints = [
+      // V3 API endpoints
+      { url: `${PUMP_FUN_BASE_URL}/likes/${commentId}`, method: 'post' },
+      { url: `${PUMP_FUN_BASE_URL}/reply/${commentId}/like`, method: 'post' },
+      { url: `${PUMP_FUN_BASE_URL}/replies/${commentId}/like`, method: 'post' },
+      // Client proxy endpoints
+      { url: `${CLIENT_PROXY_URL}/likes/${commentId}`, method: 'post' }, 
+      { url: `${CLIENT_PROXY_URL}/reply/${commentId}/like`, method: 'post' },
+      { url: `${CLIENT_PROXY_URL}/replies/${commentId}/like`, method: 'post' },
+      // Alternative domain endpoints
+      { url: `https://api-v3.pump.fun/likes/${commentId}`, method: 'post' },
+      { url: `https://pump-fe.helius-rpc.com/likes/${commentId}`, method: 'post' }
+    ];
+    
+    // Get the auth token from the result
+    const authToken = authResult.authToken;
+    const awsToken = authResult.awsToken;
+    
+    // We need the auth token to work
+    if (!authToken) {
+      console.log(chalk.red(`Missing auth token, cannot like comment.`));
+      return false;
+    }
+    
+    // Try each endpoint until one works
+    for (const endpoint of likeEndpoints) {
+      try {
+        console.log(chalk.cyan(`Trying to like comment using: ${endpoint.url}`));
+        
+        const response = await client.request({
+          method: endpoint.method,
+          url: endpoint.url,
+          headers: {
+            ...COMMON_HEADERS,
+            "Cookie": `auth_token=${authToken}`,
+            "X-Aws-Proxy-Token": awsToken || '',
+            "Authorization": `Bearer ${authToken}`,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+          }
+        });
 
         if (response.status >= 200 && response.status < 300) {
           console.log(chalk.green(`✓ Successfully liked comment ID: ${commentId}`));
           return true;
-        } else {
-          console.warn(chalk.yellow(`Like attempt ${attempt} returned status: ${response.status}`));
-          
-          if (attempt < MAX_RETRIES) {
-            console.log(chalk.yellow(`Retrying in ${RETRY_DELAY/1000}s...`));
-            await sleep(RETRY_DELAY);
-          }
         }
       } catch (error: any) {
-        console.error(chalk.yellow(`Like attempt ${attempt} failed: ${error.message}`));
-        
-        if (attempt < MAX_RETRIES) {
-          console.log(chalk.yellow(`Retrying in ${RETRY_DELAY/1000}s...`));
-          await sleep(RETRY_DELAY);
-        }
+        console.log(chalk.yellow(`Failed to like comment with ${endpoint.url}: ${error.message}`));
+        // Continue to the next endpoint
       }
     }
-
-    console.error(chalk.red(`Failed to like comment ID ${commentId} after ${MAX_RETRIES} attempts`));
+    
+    console.log(chalk.red(`All like endpoints failed for comment ID: ${commentId}`));
     return false;
   } catch (error: any) {
-    console.error(chalk.red(`Error liking comment ID ${commentId}: ${error.message}`));
-    if (error.response) {
-      console.error(chalk.red(`Error response: ${JSON.stringify(error.response.data)}`));
-    }
+    console.error(chalk.red(`Error liking comment: ${error.message}`));
     return false;
   }
 }
 
 /**
- * Fetches replies for a given token mint from the API
- * @param tokenMint The mint address of the token
- * @param proxy Ignored - always uses direct connection
- * @param authResult Optional authentication result for authenticated requests
+ * Fetch replies for a token with proxy support
+ * @param tokenMint Token mint address
+ * @param proxy Optional proxy configuration
+ * @param authResult Optional authentication result with tokens
  * @returns Array of replies
  */
 export async function fetchReplies(
@@ -523,36 +537,68 @@ export async function fetchReplies(
   proxy?: any,
   authResult?: PumpFunAuthResult
 ): Promise<any[]> {
-  console.log(chalk.cyan(`Fetching replies for token ${tokenMint.substring(0, 8)}...`));
+  // Always use proxy when possible
+  const proxyManager = getProxyManager();
+  let proxyConfig = proxy;
   
-  // Create axios instance without proxy
-  const client = createAxiosInstance();
-  
-  // Use the URL format from the reference implementation
-  const repliesUrl = `${PUMP_FUN_BASE_URL}/replies/${tokenMint}?limit=1000&offset=0`;
-  
-  // Set up headers
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Accept": "*/*",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-  };
-  
-  // Add authentication if available
-  if (authResult) {
-    headers["Cookie"] = `auth_token=${authResult.authToken}`;
-    if (authResult.awsToken) {
-      headers["X-Aws-Proxy-Token"] = authResult.awsToken;
+  // If no proxy provided or it's just a boolean flag
+  if (!proxy || typeof proxy === 'boolean' || proxy.useProxy) {
+    if (proxyManager && proxyManager.isEnabled()) {
+      // Generate a session ID for consistent proxy usage
+      const sessionId = proxy?.sessionId || `fetch-${Math.floor(Math.random() * 1000000)}`;
+      
+      // Get country-specific US proxy for pump.fun
+      try {
+        proxyConfig = proxyManager.getAxiosConfig('US', undefined, sessionId);
+        console.log(chalk.green(`✓ Using Oxylabs proxy for fetching replies with session ID: ${sessionId}`));
+      } catch (error) {
+        console.log(chalk.red(`Error getting proxy config: ${error instanceof Error ? error.message : String(error)}`));
+        proxyConfig = undefined;
+      }
+    } else {
+      console.log(chalk.red('Warning: Proxy manager is not enabled. Fetching replies may fail due to CAPTCHA protection.'));
+      proxyConfig = undefined;
     }
+  } else {
+    // Get session ID from proxy object if it exists
+    const proxySessionId = proxy?.sessionId || "custom";
+    console.log(chalk.green(`✓ Using provided proxy configuration for fetching replies with session ID: ${proxySessionId}`));
+  }
+  
+  // Create axios instance with or without proxy
+  let client;
+  try {
+    client = createAxiosInstance(proxyConfig);
+  } catch (error) {
+    console.log(chalk.red(`Error creating axios instance: ${error instanceof Error ? error.message : String(error)}`));
+    client = axios.create({
+      timeout: 30000,
+      headers: COMMON_HEADERS
+    });
   }
   
   try {
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Try both API endpoints
+    for (const baseURL of [PUMP_FUN_BASE_URL, CLIENT_PROXY_URL]) {
       try {
-        console.log(chalk.gray(`Fetching replies attempt ${attempt}/${MAX_RETRIES}...`));
-        const response = await client.get(repliesUrl, { headers });
+        const url = `${baseURL}/replies/${tokenMint}?limit=1000&offset=0`;
         
-        // Check for valid response
+        const headers: Record<string, string> = {
+          ...COMMON_HEADERS,
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+        };
+        
+        // Add authentication tokens if available
+        if (authResult) {
+          headers["Cookie"] = `auth_token=${authResult.authToken}`;
+          if (authResult.awsToken) {
+            headers["X-Aws-Proxy-Token"] = authResult.awsToken;
+          }
+        }
+        
+        const response = await client.get(url, { headers });
+        
+        // Check if response is valid
         if (response.status === 200 && response.data) {
           let replies: any[] = [];
           
@@ -563,26 +609,16 @@ export async function fetchReplies(
             replies = response.data.replies;
           }
           
-          if (replies.length > 0) {
-            console.log(chalk.green(`Successfully fetched ${replies.length} replies`));
-            return replies;
-          } else {
-            console.log(chalk.yellow(`No replies found for ${tokenMint.substring(0, 8)}`));
-            return [];
-          }
+          console.log(chalk.green(`Successfully fetched ${replies.length} replies from ${baseURL}`));
+          return replies;
         }
       } catch (error: any) {
-        console.log(chalk.yellow(`Fetch attempt ${attempt} failed: ${error.message}`));
-        
-        if (attempt < MAX_RETRIES) {
-          console.log(chalk.yellow(`Retrying in ${RETRY_DELAY/1000}s...`));
-          await sleep(RETRY_DELAY);
-        }
+        console.log(chalk.yellow(`Failed to fetch replies from ${baseURL}: ${error.message}`));
       }
     }
     
-    // If all attempts failed
-    console.log(chalk.red(`Failed to fetch replies after ${MAX_RETRIES} attempts`));
+    // If we reach here, all endpoints failed
+    console.log(chalk.red(`Failed to fetch replies for token ${tokenMint}`));
     return [];
   } catch (error: any) {
     console.error(chalk.red(`Error fetching replies: ${error.message}`));
@@ -591,13 +627,13 @@ export async function fetchReplies(
 }
 
 /**
- * Fetches replies and likes them for a given token mint.
- * @param tokenMint The mint address of the token.
- * @param authResult The authentication result containing the authToken.
- * @param getRepliesFunction Optional function that fetches replies (defaults to fetchReplies).
- * @param proxy Ignored - always uses direct connection
- * @param likeTopX Optional number to like only the top X replies. If 0 or undefined, likes all.
- * @returns Number of successfully liked comments.
+ * Enhanced bulk like comments
+ * @param tokenMint Token mint address
+ * @param authResult Authentication result with tokens
+ * @param getRepliesFunction Optional custom function to get replies
+ * @param proxy Optional proxy configuration
+ * @param likeTopX Number of top comments to like (0 for all)
+ * @returns Number of comments successfully liked
  */
 export async function enhancedBulkLikeComments(
   tokenMint: string,
@@ -606,45 +642,95 @@ export async function enhancedBulkLikeComments(
   proxy?: any,
   likeTopX?: number
 ): Promise<number> {
-  if (!authResult || !authResult.authToken) {
-    console.error(chalk.red('Cannot like comments: Missing authentication token.'));
-    return 0;
-  }
-
-  console.log(chalk.cyan(`Fetching replies for token ${tokenMint.substring(0, 8)} to like...`));
+  console.log(chalk.cyan(`Fetching replies for token ${tokenMint} to like...`));
   
-  // Use provided function or default to our implementation
-  const getRepFunc = getRepliesFunction || fetchReplies;
-  const replies = await getRepFunc(tokenMint, undefined, authResult);
-
-  if (!replies || replies.length === 0) {
-    console.log(chalk.yellow(`No replies found for ${tokenMint.substring(0, 8)} or failed to fetch.`));
-    return 0;
-  }
-
-  console.log(chalk.cyan(`Found ${replies.length} replies. Attempting to like...`));
-  let likedCount = 0;
-  const repliesToLike = (likeTopX && likeTopX > 0 && likeTopX < replies.length) 
-    ? replies.slice(0, likeTopX) 
-    : replies;
-
-  for (const reply of repliesToLike) {
-    if (reply.id) {
-      const success = await enhancedLikeComment(reply.id, authResult);
-      if (success) {
-        likedCount++;
-      }
-      
-      // Add a random delay between likes to avoid rate limiting
-      if (repliesToLike.length > 1) {
-        const delay = Math.floor(Math.random() * 1000) + 500;
-        await sleep(delay);
+  try {
+    // Always use proxy when possible
+    const proxyManager = getProxyManager();
+    let proxyConfig = proxy;
+    
+    // If no proxy provided or it's just a boolean flag
+    if (!proxy || typeof proxy === 'boolean' || proxy.useProxy) {
+      if (proxyManager && proxyManager.isEnabled()) {
+        // Generate a session ID for consistent proxy usage
+        const sessionId = proxy?.sessionId || `bulk-like-${Math.floor(Math.random() * 1000000)}`;
+        
+        // Get country-specific US proxy for pump.fun
+        try {
+          proxyConfig = proxyManager.getAxiosConfig('US', undefined, sessionId);
+          console.log(chalk.green(`✓ Using Oxylabs proxy for bulk likes with session ID: ${sessionId}`));
+        } catch (error) {
+          console.log(chalk.red(`Error getting proxy config: ${error instanceof Error ? error.message : String(error)}`));
+          proxyConfig = undefined;
+        }
+      } else {
+        console.log(chalk.red('Warning: Proxy manager is not enabled. Liking comments may fail due to CAPTCHA protection.'));
+        proxyConfig = undefined;
       }
     } else {
-      console.warn(chalk.yellow('Reply object missing ID, cannot like:', reply));
+      // Get session ID from proxy object if it exists
+      const proxySessionId = proxy?.sessionId || "custom";
+      console.log(chalk.green(`✓ Using provided proxy configuration for bulk likes with session ID: ${proxySessionId}`));
     }
-  }
+    
+    // Default to our fetchReplies if no custom function provided
+    const fetchRepliesFn = getRepliesFunction || fetchReplies;
+    
+    // Fetch the replies for this token
+    console.log(chalk.cyan(`Fetching replies for token ${tokenMint}...`));
+    
+    // Use proxy configuration
+    const replies = await fetchRepliesFn(tokenMint, proxyConfig, authResult);
 
-  console.log(chalk.green(`Finished liking process for ${tokenMint.substring(0, 8)}. Successfully liked ${likedCount}/${repliesToLike.length} comments.`));
-  return likedCount;
+    if (!replies || replies.length === 0) {
+      console.log(chalk.yellow('No replies found to like'));
+      return 0;
+    }
+
+    console.log(chalk.green(`Successfully fetched ${replies.length} replies`));
+    
+    // Determine how many comments to like
+    const maxReplies = likeTopX && likeTopX > 0 ? 
+      Math.min(likeTopX, replies.length) : 
+      replies.length;
+    
+    console.log(chalk.cyan(`Found ${replies.length} replies. Attempting to like...`));
+    
+    let likeCount = 0;
+    
+    // Like the top X replies (or all if likeTopX is 0)
+    for (let i = 0; i < maxReplies; i++) {
+      const reply = replies[i];
+      
+      if (!reply || !reply.id) {
+        continue;
+      }
+      
+      try {
+        // Use the same proxy configuration for liking
+        const success = await enhancedLikeComment(reply.id, authResult, proxyConfig);
+        
+        if (success) {
+          likeCount++;
+          console.log(chalk.green(`✓ Successfully liked comment ID: ${reply.id}`));
+        } else {
+          console.log(chalk.yellow(`Failed to like comment ID: ${reply.id}`));
+        }
+        
+        // Add a small random delay between likes to appear more natural
+        if (i < maxReplies - 1) {
+          const delay = Math.floor(Math.random() * 1000) + 500; // 500-1500ms
+          await sleep(delay);
+        }
+      } catch (likeError: any) {
+        console.log(chalk.yellow(`Error liking comment ID ${reply.id}: ${likeError.message}`));
+      }
+    }
+    
+    console.log(chalk.green(`Finished liking process for ${tokenMint}. Successfully liked ${likeCount}/${maxReplies} comments.`));
+    return likeCount;
+  } catch (error: any) {
+    console.log(chalk.red(`Error in bulk like process: ${error.message}`));
+    return 0;
+  }
 } 

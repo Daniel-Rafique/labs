@@ -20,8 +20,8 @@ export function resolveWalletPath(directory: string, isLightningMode: boolean = 
   const projectRootDir = path.resolve(__dirname, '../../');
   const configDir = path.join(projectRootDir, '.config');
   
-  // Standard wallet filename depends on mode
-  let walletFileName = isLightningMode ? 'lightning-wallets.json' : 'wallets.json';
+  // Always use wallets.json regardless of mode
+  const walletFileName = 'wallets.json';
   
   // If directory is explicitly specified, use it
   let fullPath: string;

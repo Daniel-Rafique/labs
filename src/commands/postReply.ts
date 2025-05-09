@@ -5,8 +5,8 @@ import axios from 'axios';
 import * as path from 'path';
 import { loadWallets, WalletData, walletDataToKeypair } from '../utils/wallet';
 import { sleep } from '../utils/transaction';
-// Using require for OpenAI to avoid type issues
-const { Configuration, OpenAIApi } = require('openai');
+// Import OpenAI SDK using v4 syntax
+import OpenAI from 'openai';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as bs58 from 'bs58';
@@ -16,6 +16,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 // Import our wrapper for enhanced implementation
 import { enhancedPostComment, enhancedAuthenticate, enhancedBulkLikeComments } from '../utils/PumpFunWrapper';
+import { getProxyManager } from '../utils/proxyManager';
 
 // Load environment variables
 dotenv.config();
@@ -37,18 +38,18 @@ async function saveApiKeyToEnv(apiKey: string): Promise<void> {
       envContent = fs.readFileSync(envPath, 'utf8');
     }
     
-    // Check if OPENAI_KEY already exists in the file
-    const openAiKeyRegex = /^OPENAI_KEY=.*/m;
+    // Check if OPENAI_API_KEY already exists in the file
+    const openAiKeyRegex = /^OPENAI_API_KEY=.*/m;
     
     if (openAiKeyRegex.test(envContent)) {
-      // Replace existing OPENAI_KEY
-      envContent = envContent.replace(openAiKeyRegex, `OPENAI_KEY=${apiKey}`);
+      // Replace existing OPENAI_API_KEY
+      envContent = envContent.replace(openAiKeyRegex, `OPENAI_API_KEY=${apiKey}`);
     } else {
-      // Add OPENAI_KEY if it doesn't exist
+      // Add OPENAI_API_KEY if it doesn't exist
       if (envContent && !envContent.endsWith('\n')) {
         envContent += '\n';
       }
-      envContent += `OPENAI_KEY=${apiKey}\n`;
+      envContent += `OPENAI_API_KEY=${apiKey}\n`;
     }
     
     // Write updated content back to .env file
@@ -66,7 +67,7 @@ interface PostReplyOptions {
   comment?: string;
   useAi?: boolean;
   randomize?: boolean;
-  useProxies?: boolean;
+  useProxy?: boolean;
   shillMode?: boolean;
   preferredMethod?: 'browser';
   likeMode?: boolean;
@@ -86,11 +87,141 @@ export async function postReplyCommand(options: PostReplyOptions): Promise<void>
       shillMode, 
       preferredMethod,
       likeMode,
-      likeCount
+      likeCount,
+      useProxy
     } = options;
     
-    // Force proxy option to be false regardless of input
-    const useProxies = false;
+    // Always enable proxies by default unless explicitly disabled
+    if (useProxy === undefined) {
+      // Default to true
+      useProxy = true;
+      
+      // Check environment variables as a potential override
+      if (process.env.USE_PROXIES === 'false') {
+        useProxy = false;
+      }
+    }
+    
+    // Check that proxy manager is properly configured
+    if (useProxy) {
+      const proxyManager = getProxyManager();
+      if (proxyManager.isEnabled()) {
+        console.log(chalk.green('✓ Using Oxylabs residential proxies for more organic comment posting patterns'));
+        
+        // Test proxy connection
+        try {
+          const testResult = await proxyManager.testProxy();
+          if (testResult.success) {
+            console.log(chalk.green(`✓ Proxy test successful: ${testResult.ip}`));
+          } else {
+            console.log(chalk.yellow(`⚠️ Proxy test failed: ${testResult.message}`));
+            
+            // Ask if they want to try configuring proxies
+            const setupAnswer = await inquirer.prompt([
+              {
+                type: 'confirm',
+                name: 'setupProxy',
+                message: 'Proxy test failed. Would you like to run proxy setup now?',
+                default: true
+              }
+            ]);
+            
+            if (setupAnswer.setupProxy) {
+              // Dynamically import and run the setup command
+              try {
+                const { setupProxyCommand } = await import('./setupProxy');
+                await setupProxyCommand({
+                  service: 'oxylabs' // Force Oxylabs as the only provider
+                });
+                
+                // Test again after setup
+                const retestResult = await proxyManager.testProxy();
+                if (retestResult.success) {
+                  console.log(chalk.green(`✓ Proxy setup successful! Connected via: ${retestResult.ip}`));
+                  useProxy = true;
+                } else {
+                  console.log(chalk.yellow(`⚠️ Proxy setup failed. Continuing without proxies.`));
+                  useProxy = false;
+                }
+              } catch (setupError) {
+                console.log(chalk.red(`Error setting up proxies: ${setupError instanceof Error ? setupError.message : String(setupError)}`));
+                useProxy = false;
+              }
+            } else {
+              const continueAnswer = await inquirer.prompt([
+                {
+                  type: 'confirm',
+                  name: 'continueWithoutProxy',
+                  message: 'Continue without proxy? (Not recommended - may encounter CAPTCHA)',
+                  default: false
+                }
+              ]);
+              
+              if (continueAnswer.continueWithoutProxy) {
+                useProxy = false;
+              } else {
+                return; // Exit if they don't want to continue
+              }
+            }
+          }
+        } catch (error) {
+          console.log(chalk.yellow(`Error testing proxy: ${error instanceof Error ? error.message : String(error)}`));
+          useProxy = false;
+        }
+      } else {
+        console.log(chalk.yellow('Proxy support is not properly configured.'));
+        
+        // Ask if they want to set up proxies
+        const setupAnswer = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'setupProxy',
+            message: 'Would you like to set up Oxylabs proxies now? (Recommended to avoid CAPTCHA)',
+            default: true
+          }
+        ]);
+        
+        if (setupAnswer.setupProxy) {
+          // Dynamically import and run the setup command
+          try {
+            const { setupProxyCommand } = await import('./setupProxy');
+            await setupProxyCommand({
+              service: 'oxylabs' // Force Oxylabs as the only provider
+            });
+            
+            // Test after setup
+            const retestResult = await proxyManager.testProxy();
+            if (retestResult.success) {
+              console.log(chalk.green(`✓ Proxy setup successful! Connected via: ${retestResult.ip}`));
+              useProxy = true;
+            } else {
+              console.log(chalk.yellow(`⚠️ Proxy setup failed. Continuing without proxies.`));
+              useProxy = false;
+            }
+          } catch (setupError) {
+            console.log(chalk.red(`Error setting up proxies: ${setupError instanceof Error ? setupError.message : String(setupError)}`));
+            useProxy = false;
+          }
+        } else {
+          const continueAnswer = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'continueWithoutProxy',
+              message: 'Continue without proxy? (Not recommended - may encounter CAPTCHA)',
+              default: false
+            }
+          ]);
+          
+          if (continueAnswer.continueWithoutProxy) {
+            useProxy = false;
+          } else {
+            return; // Exit if they don't want to continue
+          }
+        }
+      }
+    } else {
+      console.log(chalk.red('⚠️ Running without proxies. Comments may fail due to CAPTCHA protection.'));
+    }
     
     if (!walletPath) {
       // Get project root directory
@@ -109,10 +240,18 @@ export async function postReplyCommand(options: PostReplyOptions): Promise<void>
     // Always use browser method, no need to ask
     preferredMethod = 'browser';
     
-    console.log(chalk.green('✓ Using direct connection for optimal reliability'));
-    
-    // Empty proxies data to ensure we never use proxies
+    // Initialize proxy data structure
     let proxiesData: ProxySettings[] = [];
+    
+    // Load proxies if enabled
+    if (useProxy) {
+      const proxyManager = getProxyManager();
+      
+      if (proxyManager.isEnabled()) {
+        // We'll use the ProxyManager instead of loading proxies directly
+        console.log(chalk.green(`Using configured proxies from proxy manager`));
+      }
+    }
     
     // Get token mint if not provided - check env variables first
     if (!tokenMint) {
@@ -160,8 +299,8 @@ export async function postReplyCommand(options: PostReplyOptions): Promise<void>
     // If using AI, check for OpenAI key
     let openaiKey: string | undefined;
     if (useAi) {
-      // Check environment variable first
-      openaiKey = process.env.OPENAI_KEY;
+      // Check environment variables - try both names for backward compatibility
+      openaiKey = process.env.OPENAI_API_KEY;
       
       if (!openaiKey) {
         const openaiKeyAnswer = await inquirer.prompt([
@@ -193,6 +332,8 @@ export async function postReplyCommand(options: PostReplyOptions): Promise<void>
             console.warn(chalk.yellow(`Could not save API key to .env file: ${error.message}`));
           }
         }
+      } else {
+        console.log(chalk.green('Using OpenAI API key from environment variables.'));
       }
     }
     
@@ -324,7 +465,8 @@ export async function postReplyCommand(options: PostReplyOptions): Promise<void>
       preferredMethod: preferredMethod,
       likeMode: likeMode || false,
       likeCount: likeCount,
-      withImage: options.withImage
+      withImage: options.withImage,
+      useProxy: useProxy
     });
   } catch (error: any) {
     console.error(chalk.red(`Error posting replies: ${error.message}`));
@@ -771,6 +913,7 @@ interface ReplyOptions {
   likeMode?: boolean;
   likeCount?: number;
   withImage?: boolean; // Option to include an image with the comment
+  useProxy?: boolean; // Add the useProxy property to match our updated approach
 }
 
 // List of random positive comments
@@ -806,10 +949,10 @@ function getRandomComment(predefinedComments?: string[]): string {
 
 // Generate AI comment using OpenAI
 async function generateAIComment(openaiKey: string, tokenMint: string, tokenInfo: any = null): Promise<string> {
-  const configuration = new Configuration({
+  // Create OpenAI client using v4 syntax
+  const openai = new OpenAI({
     apiKey: openaiKey,
   });
-  const openai = new OpenAIApi(configuration);
   
   try {
     // Build a more varied prompt that avoids hashtags, liquidity and market cap
@@ -847,9 +990,9 @@ async function generateAIComment(openaiKey: string, tokenMint: string, tokenInfo
     const randomVariation = variations[Math.floor(Math.random() * variations.length)];
     promptContent += ` ${randomVariation}`;
     
-    // Use the chat completions API instead of completions API for newer models
-    const response = await openai.createChatCompletion({
-      model: "gpt-3.5-turbo", // Use gpt-3.5-turbo instead of gpt-4o-mini to avoid API access issues
+    // Use the chat completions API with v4 syntax
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
       messages: [
         { role: "system", content: "You are a helpful assistant that creates short, enthusiastic cryptocurrency comments. Your comments should be diverse, casual, and sound like they're written by different people." },
         { role: "user", content: promptContent }
@@ -858,8 +1001,8 @@ async function generateAIComment(openaiKey: string, tokenMint: string, tokenInfo
       temperature: 0.9, // Increase temperature for more randomness
     });
     
-    // Extract and clean up the response
-    let comment = response.data.choices[0]?.message?.content?.trim() || "Love this project! 🚀";
+    // Extract and clean up the response (v4 syntax)
+    let comment = response.choices[0]?.message?.content?.trim() || "Love this project! 🚀";
     
     // Remove any hashtags that might have been added
     comment = comment.replace(/#\w+/g, '');
@@ -904,7 +1047,7 @@ async function getExistingReplies(tokenMint: string, proxy?: string | ProxySetti
   
   for (const baseUrl of apiEndpoints) {
     try {
-      spinner.text = `Fetching replies from ${baseUrl}...`;
+      spinner.text = `Fetching replies from pump.fun...`;
       
       // Set up API client with optional proxy
       const client = createAxiosInstance(proxy);
@@ -953,7 +1096,7 @@ async function getExistingReplies(tokenMint: string, proxy?: string | ProxySetti
           spinner.succeed(`New token detected - no existing replies yet`);
           return [];
         } else {
-          console.log(chalk.yellow(`Server returned status ${response.status} from ${repliesUrl}`));
+          console.log(chalk.yellow(`Server returned status ${response.status} from pump.fun`));
         }
       } catch (urlError: any) {
         // Check if we should stop trying
@@ -964,17 +1107,17 @@ async function getExistingReplies(tokenMint: string, proxy?: string | ProxySetti
         
         // More specific error messages based on error type
         if (urlError.code === 'ECONNABORTED') {
-          console.log(chalk.yellow(`Request to ${repliesUrl} timed out`));
+          console.log(chalk.yellow(`Request to pump.fun timed out`));
         } else if (urlError.response && urlError.response.status === 404) {
           // 404 error handling - new token
           spinner.succeed(`New token with no replies - you'll be the first to comment!`);
           return [];
         } else {
-          console.log(chalk.yellow(`Error with ${repliesUrl}: ${urlError.message}`));
+          console.log(chalk.yellow(`Error with pump.fun: ${urlError.message}`));
         }
       }
     } catch (error: any) {
-      console.log(chalk.yellow(`Error with endpoint ${baseUrl}: ${error.message}`));
+      console.log(chalk.yellow(`Error with pump.fun: ${error.message}`));
     }
   }
   
@@ -988,150 +1131,6 @@ async function getExistingReplies(tokenMint: string, proxy?: string | ProxySetti
   
   // Return empty array to continue with posting
   return [];
-}
-
-/**
- * Post a reply with appropriate fields matching the reply structure
- */
-async function postStructuredReply(
-  client: any,
-  baseUrl: string,
-  tokenMint: string,
-  comment: string,
-  wallet: WalletData,
-  authToken?: string
-): Promise<boolean> {
-  try {
-    // Updated payload structure based on docs
-    const payload: any = {
-      text: comment,
-      mint: tokenMint,
-      user: wallet.publicKey,
-      timestamp: Date.now()
-    };
-    
-    // Headers with optional auth token
-    const headers: any = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'Origin': 'https://pump.fun',
-      'Referer': 'https://pump.fun/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
-    };
-    
-    // Add auth token if available
-    if (authToken) {
-      // Use either Bearer token or cookie format depending on the endpoint
-      if (baseUrl.includes('client-proxy-server')) {
-        headers['Cookie'] = `auth_token=${authToken}`;
-      } else {
-        headers['Authorization'] = `Bearer ${authToken}`;
-      }
-    }
-    
-    // Try multiple endpoints based on the base URL
-    const endpoints = [
-      // Try the client-proxy-server endpoint first (most reliable)
-      baseUrl.includes('client-proxy-server') ? '/comment' : '/replies',
-      // Then try API V3 endpoint
-      '/replies'
-    ];
-    
-    for (const endpoint of endpoints) {
-      try {
-        console.log(chalk.gray(`Attempting to post to ${baseUrl}${endpoint}...`));
-        
-        // Try to post the reply
-        const response = await client.post(`${baseUrl}${endpoint}`, payload, {
-          headers,
-          timeout: 15000
-        });
-        
-        // Check if successful
-        if (response.status >= 200 && response.status < 300) {
-          console.log(chalk.green(`Reply posted successfully with ID: ${response.data?.id || 'unknown'}`));
-          return true;
-        }
-      } catch (endpointError: any) {
-        console.log(chalk.yellow(`Error posting to ${baseUrl}${endpoint}: ${endpointError.message}`));
-        // Continue to next endpoint
-      }
-    }
-    
-    return false;
-  } catch (error: any) {
-    console.log(chalk.yellow(`Error posting structured reply: ${error.message}`));
-    return false;
-  }
-}
-
-/**
- * Last resort attempt to post a comment directly without authentication
- * This might work for some API versions that don't enforce auth
- */
-async function tryDirectPostWithoutAuth(
-  client: any,
-  baseUrl: string,
-  tokenMint: string,
-  comment: string,
-  wallet: WalletData,
-  spinner: any
-): Promise<boolean> {
-  // Try client-proxy-server endpoint if baseUrl is not already that
-  const clientProxyUrl = "https://client-proxy-server.pump.fun";
-  const endpoints = [
-    { url: baseUrl, path: baseUrl.includes('client-proxy-server') ? '/comment' : '/replies' },
-    { url: clientProxyUrl, path: '/comment' } // Always try the client-proxy-server as fallback
-  ];
-  
-  for (const endpoint of endpoints) {
-    try {
-      spinner.text = `Attempting to post without auth to ${endpoint.url}${endpoint.path}...`;
-      
-      // Create minimal payload
-      const payload = {
-        text: comment,
-        mint: tokenMint,
-        user: wallet.publicKey,
-        timestamp: Date.now()
-      };
-      
-      // Use browser-like headers
-      const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Origin': 'https://pump.fun',
-        'Referer': 'https://pump.fun/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
-      };
-      
-      // Make the request
-      const response = await client.post(`${endpoint.url}${endpoint.path}`, payload, {
-        headers,
-        timeout: 15000
-      });
-      
-      // Check if successful
-      if (response.status >= 200 && response.status < 300) {
-        spinner.succeed(`Successfully posted comment without auth!`);
-        return true;
-      }
-    } catch (error: any) {
-      const errorMessage = error.message || 'Unknown error';
-      
-      // Check for CAPTCHA
-      if (errorMessage.toLowerCase().includes('captcha') || 
-          (error.response && error.response.status === 403)) {
-        spinner.warn(`CAPTCHA detected on ${endpoint.url}${endpoint.path}. Try using proxies.`);
-      } else {
-        spinner.warn(`Failed to post without auth to ${endpoint.url}${endpoint.path}: ${errorMessage}`);
-      }
-      // Continue to next endpoint
-    }
-  }
-  
-  spinner.warn('Failed to post without authentication to any endpoint');
-  return false;
 }
 
 /**
@@ -1159,6 +1158,11 @@ async function postCommentWithApi(
   console.log(chalk.cyan(`Posting comment via pump.fun API...`));
 
   try {
+    // Ensure proxy has a session ID if it's an object
+    if (proxy && typeof proxy === 'object' && !proxy.sessionId) {
+      proxy.sessionId = `comment-${wallet.publicKey.substring(0, 8)}-${Math.floor(Math.random() * 1000000)}`;
+    }
+
     // First authenticate with the service - this now returns both authToken and awsToken
     const authResult = await enhancedAuthenticate(wallet, proxy);
     
@@ -1219,68 +1223,16 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
   let totalComments = 0;
   let verifiedComments = 0;
   
-  // Convert basic proxy strings to proxy settings if needed
-  let proxySettings: ProxySettings[] = [];
-  if (options.proxies && options.proxies.length > 0) {
-    // Convert string proxies to ProxySettings objects
-    proxySettings = (options.proxies as Array<string | ProxySettings>).map(proxy => {
-      if (typeof proxy === 'string') {
-        const type = proxy.startsWith('socks5://') ? 'socks5' : 
-                    proxy.startsWith('socks4://') ? 'socks4' : 
-                    proxy.startsWith('https://') ? 'https' : 'http';
-        
-        // Check if this is an Oxylabs proxy
-        const isOxylabs = proxy.includes('oxylabs');
-        
-        return {
-          url: proxy,
-          type,
-          lastUsed: 0,
-          successCount: 0,
-          failureCount: 0,
-          isBanned: false,
-          isResidential: isOxylabs // Mark Oxylabs proxies as residential
-        };
-      }
-      // If it's already a ProxySettings object, return it
-      return proxy as ProxySettings;
-    });
-  }
+  // Use ProxyManager if proxies are enabled
+  const useProxies = options.useProxy === true;
+  let proxyManager = null;
   
-  // Log the loaded proxies
-  if (proxySettings.length > 0) {
-    console.log(chalk.green(`Loaded ${proxySettings.length} proxies. Testing connectivity...`));
-    
-    // Do a preliminary check of the proxy settings
-    for (const proxy of proxySettings) {
-      try {
-        // Check if this is likely an Oxylabs proxy
-        if (proxy.url.includes('oxylabs')) {
-          console.log(chalk.cyan(`Detected Oxylabs proxy: ${hideProxyCredentials(proxy.url)}`));
-          
-          // Extract username and password to check format
-          try {
-            const url = new URL(proxy.url);
-            if (url.username && url.password) {
-              console.log(chalk.green(`✓ Proxy has correct credential format`));
-              
-              // Check if the username contains a session ID (customer-SESSIONID format)
-              if (url.username.includes('-')) {
-                console.log(chalk.green(`✓ Oxylabs proxy username contains session ID format`));
-              } else {
-                console.log(chalk.yellow(`⚠️ Oxylabs proxy username should include a session ID (e.g., customer-SESSION123)`));
-              }
-            } else {
-              console.log(chalk.red(`❌ Proxy URL is missing credentials. Format should be http://username:password@pr.oxylabs.io:7777`));
-            }
-          } catch (e: any) {
-            console.log(chalk.red(`❌ Could not parse proxy URL: ${e.message}`));
-          }
-        }
-      } catch (error: any) {
-        // Continue to next proxy if there's an error
-        console.log(chalk.yellow(`Error checking proxy ${hideProxyCredentials(proxy.url)}: ${error.message}`));
-      }
+  if (useProxies) {
+    proxyManager = getProxyManager();
+    if (!proxyManager.isEnabled()) {
+      console.log(chalk.yellow('Proxy support is requested but not properly configured. Continuing without proxies.'));
+    } else {
+      console.log(chalk.green(`Using proxy manager for comment posting`));
     }
   }
   
@@ -1289,10 +1241,16 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
     spinner.text = "Checking if Pump.fun API is available...";
     
     // Try fetch with and without proxy to establish baseline connectivity
-    let proxyForCheck: ProxySettings | undefined;
-    if (proxySettings.length > 0) {
-      // Get a random proxy for the initial check
-      proxyForCheck = proxySettings[Math.floor(Math.random() * proxySettings.length)];
+    let proxyForCheck: any = undefined;
+    if (useProxies && proxyManager && proxyManager.isEnabled()) {
+      // Get config for checking with proxy
+      try {
+        proxyForCheck = proxyManager.getAxiosConfig();
+        console.log(chalk.green('Using Oxylabs proxy for API availability check'));
+      } catch (error) {
+        console.log(chalk.yellow(`Error getting proxy configuration: ${error instanceof Error ? error.message : String(error)}`));
+        proxyForCheck = undefined;
+      }
     }
     
     // Try first without proxy
@@ -1414,70 +1372,20 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
     const wallet = wallets[i];
     usedComments.set(wallet.publicKey, new Set<string>());
     
-    // Proxy selection strategy
-    let currentProxiesToTry: ProxySettings[] = [];
+    // Proxy setup for this wallet
+    let proxyConfig = undefined;
+    const walletSessionId = `comment-${wallet.publicKey.substring(0, 8)}`;
     
-    if (proxySettings.length > 0) {
-      // Filter out banned proxies
-      const availableProxies = proxySettings.filter(p => !p.isBanned && (!p.cooldownUntil || p.cooldownUntil < Date.now()));
-      
-      if (availableProxies.length === 0) {
-        // If all proxies are on cooldown, take the ones with soonest expiry
-        const sortedByExpiry = [...proxySettings]
-          .filter(p => !p.isBanned)
-          .sort((a, b) => (a.cooldownUntil || 0) - (b.cooldownUntil || 0));
-        
-        if (sortedByExpiry.length > 0) {
-          const nextAvailable = sortedByExpiry[0];
-          const waitTime = Math.ceil((nextAvailable.cooldownUntil || 0) - Date.now()) / 1000;
-          
-          console.log(chalk.yellow(`All proxies are on cooldown. Waiting ${waitTime} seconds for next available proxy...`));
-          await sleep(Math.max(1000, nextAvailable.cooldownUntil || 0 - Date.now()));
-          
-          currentProxiesToTry = [nextAvailable];
-        } else {
-          console.log(chalk.red(`All proxies are banned. Attempting without proxy...`));
-          currentProxiesToTry = [];
-        }
-      } else {
-        // Prioritize residential proxies first as they're more likely to work
-        const residentialProxies = availableProxies.filter(p => p.isResidential === true);
-        const datacenterProxies = availableProxies.filter(p => p.isResidential !== true);
-        
-        // Select proxies based on success rate and residential status
-        const sortResidentialProxies = [...residentialProxies].sort((a, b) => {
-          const aSuccessRate = a.successCount ? a.successCount / (a.successCount + (a.failureCount || 0)) : 0;
-          const bSuccessRate = b.successCount ? b.successCount / (b.successCount + (b.failureCount || 0)) : 0;
-          return bSuccessRate - aSuccessRate; // Higher success rate first
-        });
-        
-        const sortDatacenterProxies = [...datacenterProxies].sort((a, b) => {
-          const aSuccessRate = a.successCount ? a.successCount / (a.successCount + (a.failureCount || 0)) : 0;
-          const bSuccessRate = b.successCount ? b.successCount / (b.successCount + (b.failureCount || 0)) : 0;
-          return bSuccessRate - aSuccessRate; // Higher success rate first
-        });
-        
-        // Build proxy list prioritizing residential over datacenter
-        if (residentialProxies.length > 0) {
-          // Take best residential proxies first
-          currentProxiesToTry = sortResidentialProxies.slice(0, Math.min(2, sortResidentialProxies.length));
-          
-          // Add one datacenter proxy as backup if available
-          if (datacenterProxies.length > 0) {
-            currentProxiesToTry.push(sortDatacenterProxies[0]);
-          }
-        } else {
-          // No residential proxies, take top datacenter proxies
-          currentProxiesToTry = sortDatacenterProxies.slice(0, Math.min(3, sortDatacenterProxies.length));
-        }
-        
-        // If we have few proxies, use all available
-        if (availableProxies.length <= 3) {
-          currentProxiesToTry = availableProxies;
-        }
+    if (useProxies && proxyManager && proxyManager.isEnabled()) {
+      // Get a proxy config for this wallet's session
+      console.log(chalk.cyan(`Setting up Oxylabs proxy for wallet ${i+1}/${wallets.length} with session ID: ${walletSessionId}`));
+      try {
+        proxyConfig = proxyManager.getAxiosConfig('US', undefined, walletSessionId);
+      } catch (error) {
+        console.log(chalk.red(`Error creating proxy config: ${error instanceof Error ? error.message : String(error)}`));
+        // Fall back to simple boolean flag
+        proxyConfig = { useProxy: true, sessionId: walletSessionId };
       }
-      
-      console.log(chalk.gray(`Assigned ${currentProxiesToTry.length} proxies to wallet ${i+1}/${wallets.length}`));
     }
     
     spinner.text = `Processing wallet ${i + 1}/${wallets.length}: ${wallet.publicKey.substring(0, 8)}...`;
@@ -1557,81 +1465,33 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
         // Try with each proxy
         let posted = false;
         
-        // Try each proxy in sequence
-        for (const proxyToUse of currentProxiesToTry.length > 0 ? currentProxiesToTry : [undefined]) {
-          if (proxyToUse && proxyToUse.isBanned) {
-            console.log(chalk.gray(`Skipping banned proxy: ${hideProxyCredentials(proxyToUse.url)}`));
-            continue;
-          }
+        try {
+          console.log(chalk.cyan(`Attempting to post comment via API ${proxyConfig ? 'with proxy' : 'without proxy'}: "${finalComment.substring(0, 30)}..."`));
           
-          console.log(chalk.cyan(`Attempting to post comment via API ${proxyToUse ? 'with proxy' : 'without proxy'}: "${finalComment.substring(0, 30)}..."`));
+          posted = await postCommentWithApi(wallet, tokenMint, finalComment, proxyConfig, options.likeMode, options.likeCount, options.withImage);
           
-          try {
-            // Mark proxy as used
-            if (proxyToUse) {
-              proxyToUse.lastUsed = Date.now();
-            }
+          if (posted) {
+            successCount++;
+            totalComments++;
+            verifiedComments++;
             
-            posted = await postCommentWithApi(wallet, tokenMint, finalComment, proxyToUse, options.likeMode, options.likeCount, options.withImage);
-            
-            if (posted) {
-              successCount++;
-              totalComments++;
-              verifiedComments++;
-              
-              // Update proxy success stats
-              if (proxyToUse) {
-                proxyToUse.successCount = (proxyToUse.successCount || 0) + 1;
-                console.log(chalk.green(`✓ Successfully posted comment with proxy ${hideProxyCredentials(proxyToUse.url)}`));
-              } else {
-                console.log(chalk.green(`✓ Successfully posted comment without proxy`));
-              }
-              
-              break; // Stop trying proxies if successful
+            // Update proxy success stats
+            if (proxyConfig) {
+              console.log(chalk.green(`✓ Successfully posted comment with proxy (session: ${proxyConfig.sessionId})`));
             } else {
-              // Update proxy failure stats
-              if (proxyToUse) {
-                proxyToUse.failureCount = (proxyToUse.failureCount || 0) + 1;
-                
-                // If proxy has too many failures, put it on a temporary cooldown
-                if (proxyToUse.failureCount > 3 && proxyToUse.successCount === 0) {
-                  console.log(chalk.yellow(`Proxy ${hideProxyCredentials(proxyToUse.url)} has failed ${proxyToUse.failureCount} times. Putting on 3-minute cooldown.`));
-                  proxyToUse.cooldownUntil = Date.now() + 3 * 60 * 1000; // 3 minute cooldown
-                }
-                
-                console.log(chalk.yellow(`API comment posting failed with proxy: ${proxyToUse.url.split('@').pop() || proxyToUse.url}`));
-              } else {
-                console.log(chalk.yellow(`API comment posting failed without proxy`));
-              }
+              console.log(chalk.green(`✓ Successfully posted comment without proxy`));
             }
-          } catch (error: any) {
-            // Handle proxy-specific errors
-            if (proxyToUse) {
-              proxyToUse.failureCount = (proxyToUse.failureCount || 0) + 1;
-              
-              // Check for proxy ban signals
-              if (
-                error.message?.includes('ECONNREFUSED') || 
-                error.message?.includes('ETIMEDOUT') || 
-                error.message?.includes('socket hang up') ||
-                error.message?.includes('403')
-              ) {
-                console.log(chalk.red(`Proxy ${hideProxyCredentials(proxyToUse.url)} appears to be banned or not working.`));
-                proxyToUse.isBanned = true;
-                bannedProxies.add(proxyToUse.url);
-              } else {
-                // Just a regular failure, add to cooldown if failures mounting
-                if (proxyToUse.failureCount > 2) {
-                  proxyToUse.cooldownUntil = Date.now() + 2 * 60 * 1000; // 2 minute cooldown
-                }
-              }
+          } else {
+            // Update proxy failure stats
+            if (proxyConfig) {
+              console.log(chalk.yellow(`API comment posting failed with proxy (session: ${proxyConfig.sessionId})`));
+            } else {
+              console.log(chalk.yellow(`API comment posting failed without proxy`));
             }
           }
-        }
-        
-        if (!posted) {
+        } catch (error: any) {
           failureCount++;
-          console.log(chalk.red(`Failed to post comment after trying all available proxies.`));
+          console.error(chalk.red(`\nError posting reply: ${error.message}`));
         }
       } catch (error: any) {
         failureCount++;
@@ -1711,26 +1571,30 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
   console.log(chalk.green(`Failed replies: ${failureCount}`));
   
   // Print proxy stats
-  if (proxySettings.length > 0) {
+  if (useProxies && proxyManager) {
     console.log(chalk.cyan('\nProxy Performance:'));
-    const sortedProxies = [...proxySettings].sort((a, b) => (b.successCount || 0) - (a.successCount || 0));
+    const proxyStats = proxyManager.getProxyStats();
     
-    for (const proxy of sortedProxies) {
-      const totalAttempts = (proxy.successCount || 0) + (proxy.failureCount || 0);
-      const successRate = totalAttempts > 0 ? ((proxy.successCount || 0) / totalAttempts * 100).toFixed(1) : '0.0';
-      
-      const status = proxy.isBanned ? chalk.red('BANNED') : 
-                     (proxy.cooldownUntil && proxy.cooldownUntil > Date.now()) ? 
-                     chalk.yellow('COOLDOWN') : chalk.green('ACTIVE');
-      
-      console.log(chalk.cyan(`${hideProxyCredentials(proxy.url)}: ${successRate}% success rate (${proxy.successCount || 0}/${totalAttempts}) - ${status}`));
+    if (proxyStats.length > 0) {
+      for (const proxy of proxyStats) {
+        const totalAttempts = (proxy.successCount || 0) + (proxy.failureCount || 0);
+        const successRate = totalAttempts > 0 ? ((proxy.successCount || 0) / totalAttempts * 100).toFixed(1) : '0.0';
+        
+        const status = proxy.isBanned ? chalk.red('BANNED') : 
+                      (proxy.cooldownUntil && proxy.cooldownUntil > Date.now()) ? 
+                      chalk.yellow('COOLDOWN') : chalk.green('ACTIVE');
+        
+        console.log(chalk.cyan(`${hideProxyCredentials(proxy.url)}: ${successRate}% success rate (${proxy.successCount || 0}/${totalAttempts}) - ${status}`));
+      }
+    } else {
+      console.log(chalk.yellow('No proxy statistics available yet.'));
     }
   }
   
   console.log(chalk.cyan('===================================='));
   
   // If many failures occurred with proxies, provide advice
-  if (failureCount > successCount && proxySettings.length > 0) {
+  if (failureCount > successCount && useProxies) {
     console.log(chalk.yellow('\nTroubleshooting Tips:'));
     console.log(chalk.yellow('1. Try using high-quality residential rotating proxies'));
     console.log(chalk.yellow('2. Ensure proxies are not already banned by pump.fun'));

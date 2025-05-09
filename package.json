@@ -5,16 +5,28 @@
   "main": "dist/index.js",
   "private": true,
   "bin": {
-    "labs-volume-bot": "./bin/cli.js"
+    "labs-volume-bot": "./bin/cli.js",
+    "labs": "./bin/cli.js"
   },
   "scripts": {
-    "build": "node build-workaround.js",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "labs": "node ./bin/cli.js",
+    "build": "tsc --skipLibCheck --noEmitOnError false",
+    "start": "node --no-warnings dist/index.js",
+    "dev": "ts-node --no-warnings src/index.ts",
+    "labs": "node --no-warnings -r module-alias/register dist/index.js interactive",
+    "labs:cmd": "node --no-warnings -r module-alias/register dist/index.js",
+    "check-balances": "node --no-warnings -r module-alias/register dist/index.js check-balances",
+    "debug": "node --inspect --no-warnings --enable-source-maps -r module-alias/register dist/index.js",
+    "debug:ts": "node --inspect -r ts-node/register --no-warnings src/index.ts",
+    "debug:build-run": "tsc --skipLibCheck --noEmitOnError false && node --inspect --no-warnings --enable-source-maps -r module-alias/register dist/index.js interactive",
     "package": "npm run build && pkg . --targets node18-macos-x64,node18-linux-x64,node18-win-x64 --output releases/labs-volume-bot --no-audit",
+    "build-release": "node build-release.js",
     "clean": "rm -rf dist node_modules package-lock.json",
-    "postinstall": "tsc -p tsconfig.json"
+    "postinstall": "tsc --skipLibCheck --noEmitOnError false -p tsconfig.json && npx patch-package",
+    "check-license": "node scripts/license-check.js # Usage: npm run check-license -- --key YOUR-LICENSE-KEY --save",
+    "trade-bot": "ts-node --no-warnings src/bot.ts",
+    "trade-bot:build": "tsc --skipLibCheck --noEmitOnError false && node --no-warnings -r module-alias/register dist/bot.js",
+    "start-bot": "node --no-warnings -r module-alias/register dist/index.js start-bot",
+    "setup-proxy": "node --no-warnings -r module-alias/register dist/index.js setup-proxy"
   },
   "dependencies": {
     "@solana/buffer-layout": "4.0.1",
@@ -23,16 +35,17 @@
     "@solana/web3.js": "1.98.2",
     "axios": "1.9.0",
     "bs58": "5.0.0",
-    "chalk": "5.3.0",
+    "chalk": "4.1.2",
     "commander": "12.0.0",
     "decimal.js": "10.4.3",
     "dotenv": "16.4.5",
     "figlet": "1.7.0",
     "https-proxy-agent": "7.0.2",
-    "inquirer": "9.2.15",
+    "inquirer": "8.2.5",
     "module-alias": "2.2.3",
     "node-machine-id": "1.1.12",
     "openai": "4.28.0",
+    "patch-package": "8.0.0",
     "socks-proxy-agent": "8.0.2",
     "tweetnacl": "1.0.3",
     "uuid": "9.0.1",
@@ -50,6 +63,8 @@
     "@types/node": "20.11.24",
     "@types/uuid": "9.0.8",
     "@vercel/ncc": "0.38.1",
+    "archiver": "6.0.2",
+    "javascript-obfuscator": "4.1.1",
     "pkg": "5.8.1",
     "ts-node": "10.9.2",
     "typescript": "5.3.3"
@@ -57,6 +72,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
+  "type": "commonjs",
   "license": "COMMERCIAL",
   "pkg": {
     "scripts": "dist/**/*.js",
