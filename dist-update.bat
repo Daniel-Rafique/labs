@@ -4,9 +4,13 @@ setlocal enabledelayedexpansion
 :: LABS Update Script for Windows
 :: This script updates the application while preserving user settings
 
-echo ===============================================
-echo LABS Update Tool
-echo ===============================================
+echo.
+echo 
+echo ██╗      █████╗ ██████╗ ███████╗
+echo ██║     ██╔══██╗██╔══██╗██╔════╝
+echo ██║     ███████║██████╔╝███████╗
+echo ██║     ██╔══██║██╔══██╗╚════██║
+echo ███████╗██║  ██║██████╔╝███████║                    
 echo This tool will update your LABS application while preserving your settings.
 echo.
 
