@@ -12,7 +12,11 @@ try {
   // Show license banner
   console.log(
     chalk.cyan(
-      figlet.textSync('LABS', { horizontalLayout: 'fitted' }) +
+      figlet.textSync('LABS', { 
+    font: 'ANSI Shadow',
+    horizontalLayout: 'default',
+    verticalLayout: 'default',
+      }) +
       '\nLive AI Based Strategy by Koynlabs'
     )
   );
