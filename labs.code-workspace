@@ -14,6 +14,12 @@
 		},
 		{
 			"path": "../spl-snapshot"
+		},
+		{
+			"path": "../market-maker/functions"
+		},
+		{
+			"path": "../solana-mmaker"
 		}
 	],
 	"settings": {}
