@@ -10,7 +10,7 @@ const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const axios_1 = __importDefault(require("axios"));
 // License verification server URL
-const LICENSE_SERVER = process.env.LICENSE_SERVER || 'https://api.koynlabs.com:3443/api/verify-license';
+const LICENSE_SERVER = process.env.LICENSE_SERVER;
 // Path to license file in user's home directory
 const userHome = os_1.default.homedir();
 const licenseDirPath = path_1.default.join(userHome, '.labs-volume-bot');

@@ -14,6 +14,7 @@ OPENAI_API_KEY=your-openai-api-key-here
 # Required: License key for accessing all features
 # This key is provided with your purchase
 LICENSE_KEY=your-license-key-here
+LICENSE_SERVER=https://api.koynlabs.com:3443/api/verify-license
 
 # Trading configuration (set by startBot command)
 CONTRACT_ADDRESS=
