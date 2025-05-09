@@ -13,13 +13,65 @@ dotenv.config();
 // Create a banner for insufficient wallet balance errors
 function displayInsufficientBalanceBanner(message) {
   const minMatch = message.match(/Minimum required: ([0-9.]+) SOL/);
-  const minRequired = minMatch ? minMatch[1] : 'unknown amount of';
+  const minRequired = minMatch ? parseFloat(minMatch[1]).toFixed(4) : 'unknown amount of';
+  
+  const recommendedMatch = message.match(/Recommended: ([0-9.]+) SOL/);
+  const recommendedBalance = recommendedMatch ? parseFloat(recommendedMatch[1]).toFixed(4) : null;
+  
+  // Extract cycles information
+  const cyclesMatch = message.match(/(\d+) cycles/);
+  const numCycles = cyclesMatch ? parseInt(cyclesMatch[1]) : 1;
+  
+  // Try to get the AI recommended values from .env file
+  let aiRecommendedMax = 'unknown';
+  let useAiOptimization = false;
+  let numberOfCycles = numCycles;
+  
+  try {
+    const envPath = path.join(__dirname, '../.env');
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, 'utf8');
+      const maxMatch = envContent.match(/MAX_TRADE_AMOUNT=([0-9.]+)/);
+      if (maxMatch) {
+        aiRecommendedMax = parseFloat(maxMatch[1]).toFixed(4);
+      }
+      
+      const cyclesMatch = envContent.match(/NUMBER_OF_CYCLES=([0-9]+)/);
+      if (cyclesMatch) {
+        numberOfCycles = parseInt(cyclesMatch[1]);
+      }
+      
+      useAiOptimization = envContent.includes('USE_AI_OPTIMIZATION=true');
+    }
+  } catch (e) {
+    // Ignore any errors reading the file
+  }
   
   console.error(chalk.yellow('\n========================================='));
   console.error(chalk.red('⚠️  WARNING: INSUFFICIENT WALLET BALANCE  ⚠️'));
   console.error(chalk.yellow('========================================='));
   console.error(chalk.white('None of your wallets have sufficient SOL balance to trade.'));
   console.error(chalk.white(`Minimum required: ${minRequired} SOL per wallet`));
+  
+  // Show AI recommendation context if AI is enabled
+  if (useAiOptimization) {
+    if (recommendedBalance) {
+      console.error(chalk.white(`\nRecommended balance with AI optimization for ${numberOfCycles} cycles: ${recommendedBalance} SOL per wallet`));
+    } else {
+      const baseRecommendation = parseFloat(aiRecommendedMax) * 1.5;
+      const totalRecommendation = baseRecommendation * numberOfCycles;
+      console.error(chalk.white(`\nNote: The AI recommended a maximum trade amount of ${aiRecommendedMax} SOL`));
+      console.error(chalk.white(`Recommended balance for ${numberOfCycles} cycles: ${totalRecommendation.toFixed(4)} SOL per wallet`));
+    }
+    console.error(chalk.white('When using AI optimization, wallet balance requirements may change when liquidity changes.'));
+    console.error(chalk.white(`To prevent future balance issues, fund your wallets with at least 1.5x the AI recommended amount for ${numberOfCycles} cycles.`));
+  } else if (numberOfCycles > 1) {
+    // Even without AI, we should show cycle-based recommendation
+    const baseAmount = parseFloat(minRequired);
+    const totalRecommendation = baseAmount * numberOfCycles;
+    console.error(chalk.white(`\nRecommended balance for ${numberOfCycles} cycles: ${totalRecommendation.toFixed(4)} SOL per wallet`));
+  }
+  
   console.error(chalk.white('\nPlease fund at least one wallet with SOL, then:'));
   console.error(chalk.white('1. Use the "Distribute SOL" command to spread funds to multiple wallets'));
   console.error(chalk.white('2. Restart the bot after funding your wallets'));

@@ -20,6 +20,9 @@
 		},
 		{
 			"path": "../solana-mmaker"
+		},
+		{
+			"path": "../api-endpoints"
 		}
 	],
 	"settings": {}

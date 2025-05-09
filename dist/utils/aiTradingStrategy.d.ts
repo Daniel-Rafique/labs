@@ -25,6 +25,7 @@ export declare class AITradingStrategy {
     private updateInterval;
     private metricsHistory;
     private historyMaxLength;
+    private solPrice;
     constructor(tokenAddress: string, connection: Connection, initialParameters: TradingParameters, useAi?: boolean, apiKey?: string);
     /**
      * Get the current optimized trading parameters
@@ -38,6 +39,14 @@ export declare class AITradingStrategy {
      * Fetch latest token metrics from multiple sources
      */
     private fetchTokenMetrics;
+    /**
+     * Fetch the current SOL price in USD
+     */
+    private fetchSolPrice;
+    /**
+     * Attempt to fetch metrics from alternative sources when primary source fails
+     */
+    private fetchFallbackMetrics;
     /**
      * Get AI recommendation for trading parameters
      */

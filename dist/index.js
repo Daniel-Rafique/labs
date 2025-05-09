@@ -153,7 +153,7 @@ async function showMainMenu() {
             }
         ]);
         if (action === 'quit') {
-            console.log(chalk_1.default.green('Thank you for using Koynlabs. Goodbye!'));
+            console.log(chalk_1.default.green('Thank you for using LABS. Goodbye!'));
             process.exit(0);
         }
         // Handle selected action
