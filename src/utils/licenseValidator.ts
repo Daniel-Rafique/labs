@@ -26,7 +26,7 @@ export interface LicenseStatus {
 }
 
 // License verification server URL
-const LICENSE_SERVER = process.env.LICENSE_SERVER || 'https://api.koynlabs.com:3443/api/verify-license';
+const LICENSE_SERVER = process.env.LICENSE_SERVER;
 
 // Path to license file in user's home directory
 const userHome = os.homedir();

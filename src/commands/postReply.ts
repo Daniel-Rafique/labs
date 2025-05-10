@@ -1231,7 +1231,7 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
     proxyManager = getProxyManager();
     if (!proxyManager.isEnabled()) {
       console.log(chalk.yellow('Proxy support is requested but not properly configured. Continuing without proxies.'));
-    } else {
+              } else {
       console.log(chalk.green(`Using proxy manager for comment posting`));
     }
   }
@@ -1469,27 +1469,27 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
           console.log(chalk.cyan(`Attempting to post comment via API ${proxyConfig ? 'with proxy' : 'without proxy'}: "${finalComment.substring(0, 30)}..."`));
           
           posted = await postCommentWithApi(wallet, tokenMint, finalComment, proxyConfig, options.likeMode, options.likeCount, options.withImage);
-          
-          if (posted) {
-            successCount++;
-            totalComments++;
-            verifiedComments++;
             
-            // Update proxy success stats
+            if (posted) {
+              successCount++;
+              totalComments++;
+              verifiedComments++;
+              
+              // Update proxy success stats
             if (proxyConfig) {
               console.log(chalk.green(`✓ Successfully posted comment with proxy (session: ${proxyConfig.sessionId})`));
+              } else {
+                console.log(chalk.green(`✓ Successfully posted comment without proxy`));
+              }
             } else {
-              console.log(chalk.green(`✓ Successfully posted comment without proxy`));
-            }
-          } else {
-            // Update proxy failure stats
+              // Update proxy failure stats
             if (proxyConfig) {
               console.log(chalk.yellow(`API comment posting failed with proxy (session: ${proxyConfig.sessionId})`));
-            } else {
-              console.log(chalk.yellow(`API comment posting failed without proxy`));
+              } else {
+                console.log(chalk.yellow(`API comment posting failed without proxy`));
+              }
             }
-          }
-        } catch (error: any) {
+          } catch (error: any) {
           failureCount++;
           console.error(chalk.red(`\nError posting reply: ${error.message}`));
         }
@@ -1577,14 +1577,14 @@ async function postReplies(wallets: WalletData[], tokenMint: string, apiKey: str
     
     if (proxyStats.length > 0) {
       for (const proxy of proxyStats) {
-        const totalAttempts = (proxy.successCount || 0) + (proxy.failureCount || 0);
-        const successRate = totalAttempts > 0 ? ((proxy.successCount || 0) / totalAttempts * 100).toFixed(1) : '0.0';
-        
-        const status = proxy.isBanned ? chalk.red('BANNED') : 
-                      (proxy.cooldownUntil && proxy.cooldownUntil > Date.now()) ? 
-                      chalk.yellow('COOLDOWN') : chalk.green('ACTIVE');
-        
-        console.log(chalk.cyan(`${hideProxyCredentials(proxy.url)}: ${successRate}% success rate (${proxy.successCount || 0}/${totalAttempts}) - ${status}`));
+      const totalAttempts = (proxy.successCount || 0) + (proxy.failureCount || 0);
+      const successRate = totalAttempts > 0 ? ((proxy.successCount || 0) / totalAttempts * 100).toFixed(1) : '0.0';
+      
+      const status = proxy.isBanned ? chalk.red('BANNED') : 
+                     (proxy.cooldownUntil && proxy.cooldownUntil > Date.now()) ? 
+                     chalk.yellow('COOLDOWN') : chalk.green('ACTIVE');
+      
+      console.log(chalk.cyan(`${hideProxyCredentials(proxy.url)}: ${successRate}% success rate (${proxy.successCount || 0}/${totalAttempts}) - ${status}`));
       }
     } else {
       console.log(chalk.yellow('No proxy statistics available yet.'));

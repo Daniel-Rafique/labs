@@ -202,7 +202,7 @@ async function directPumpSignIn(
   if (usingProxy) {
     console.log(chalk.cyan(`Signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)} using proxy...`));
   } else {
-    console.log(chalk.cyan(`Directly signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)}...`));
+  console.log(chalk.cyan(`Directly signing in to Pump.fun with wallet ${wallet.publicKey.substring(0, 8)}...`));
   }
   
   // Create an axios instance with or without proxy
@@ -583,19 +583,19 @@ export async function fetchReplies(
       try {
         const url = `${baseURL}/replies/${tokenMint}?limit=1000&offset=0`;
         
-        const headers: Record<string, string> = {
+  const headers: Record<string, string> = {
           ...COMMON_HEADERS,
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-        };
-        
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+  };
+  
         // Add authentication tokens if available
-        if (authResult) {
-          headers["Cookie"] = `auth_token=${authResult.authToken}`;
-          if (authResult.awsToken) {
-            headers["X-Aws-Proxy-Token"] = authResult.awsToken;
-          }
-        }
-        
+  if (authResult) {
+    headers["Cookie"] = `auth_token=${authResult.authToken}`;
+    if (authResult.awsToken) {
+      headers["X-Aws-Proxy-Token"] = authResult.awsToken;
+    }
+  }
+  
         const response = await client.get(url, { headers });
         
         // Check if response is valid
@@ -610,7 +610,7 @@ export async function fetchReplies(
           }
           
           console.log(chalk.green(`Successfully fetched ${replies.length} replies from ${baseURL}`));
-          return replies;
+            return replies;
         }
       } catch (error: any) {
         console.log(chalk.yellow(`Failed to fetch replies from ${baseURL}: ${error.message}`));
@@ -682,10 +682,10 @@ export async function enhancedBulkLikeComments(
     // Use proxy configuration
     const replies = await fetchRepliesFn(tokenMint, proxyConfig, authResult);
 
-    if (!replies || replies.length === 0) {
+  if (!replies || replies.length === 0) {
       console.log(chalk.yellow('No replies found to like'));
-      return 0;
-    }
+    return 0;
+  }
 
     console.log(chalk.green(`Successfully fetched ${replies.length} replies`));
     
@@ -693,8 +693,8 @@ export async function enhancedBulkLikeComments(
     const maxReplies = likeTopX && likeTopX > 0 ? 
       Math.min(likeTopX, replies.length) : 
       replies.length;
-    
-    console.log(chalk.cyan(`Found ${replies.length} replies. Attempting to like...`));
+
+  console.log(chalk.cyan(`Found ${replies.length} replies. Attempting to like...`));
     
     let likeCount = 0;
     
@@ -720,7 +720,7 @@ export async function enhancedBulkLikeComments(
         // Add a small random delay between likes to appear more natural
         if (i < maxReplies - 1) {
           const delay = Math.floor(Math.random() * 1000) + 500; // 500-1500ms
-          await sleep(delay);
+        await sleep(delay);
         }
       } catch (likeError: any) {
         console.log(chalk.yellow(`Error liking comment ID ${reply.id}: ${likeError.message}`));

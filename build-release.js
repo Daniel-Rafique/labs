@@ -3,9 +3,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
-const crypto = require('crypto');
 const chalk = require('chalk');
-const figlet = require('figlet');
 
 console.log('🚀 Starting enhanced release build process...');
 
@@ -724,7 +722,9 @@ fs.writeFileSync('./env-example',
   'OPENAI_API_KEY=your-openai-api-key-here\n\n' +
   '# Required: License key for accessing all features\n' +
   '# This key is provided with your purchase\n' +
-  'LICENSE_KEY=your-license-key-here\n\n' +
+  'LICENSE_KEY=your-license-key-here\n\n' + 
+  '# Required: License server URL\n' +
+  'LICENSE_SERVER=https://api.koynlabs.com:3443/api/verify-license\n\n' +
   '# Trading configuration (set by startBot command)\n' +
   'CONTRACT_ADDRESS=\n' +
   'TOKEN_MINT_ADDRESS=\n' +
@@ -774,9 +774,11 @@ pause
 `;
 
 fs.writeFileSync('./install.bat', installBatchContent);
+fs.writeFileSync('./update.bat', installBatchContent);
 
 // Make scripts executable
 execSync('chmod +x ./install.sh', { stdio: 'inherit' });
+execSync('chmod +x ./update.sh', { stdio: 'inherit' });
 
 // Step 9: Create license file template
 console.log('📜 Creating license file template...');
@@ -824,8 +826,10 @@ execSync(`cp -r ./dist "${distDir}/"`, { stdio: 'inherit' });
 execSync(`cp -r ./node_modules "${distDir}/"`, { stdio: 'inherit' });
 execSync(`cp ./dist-package.json "${distDir}/package.json"`, { stdio: 'inherit' });
 execSync(`cp ./dist-README.md "${distDir}/README.md"`, { stdio: 'inherit' });
-execSync(`cp ./install.sh "${distDir}/install.sh"`, { stdio: 'inherit' });
-execSync(`cp ./install.bat "${distDir}/install.bat"`, { stdio: 'inherit' });
+execSync(`cp ./dist-install.sh "${distDir}/install.sh"`, { stdio: 'inherit' });
+execSync(`cp ./dist-update.sh "${distDir}/update.sh"`, { stdio: 'inherit' });
+execSync(`cp ./dist-install.bat "${distDir}/install.bat"`, { stdio: 'inherit' });
+execSync(`cp ./update.bat "${distDir}/update.bat"`, { stdio: 'inherit' });
 execSync(`cp ./dist-license.key "${distDir}/license.key"`, { stdio: 'inherit' });
 execSync(`cp ./dist-npmrc "${distDir}/.npmrc"`, { stdio: 'inherit' });
 execSync(`cp ./env-example "${distDir}/.env.example"`, { stdio: 'inherit' });

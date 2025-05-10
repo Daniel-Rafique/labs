@@ -15,6 +15,9 @@ dist/trade_log.json
 dist/.DS_Store
 .DS_Store
 combined.log
+labs-*
+license.key
+
 
 # Ignore all trade_log.json and token_data.json files in strategy subdirectories
 dist/strategies/**/logs/*.jsondist/core/models/
